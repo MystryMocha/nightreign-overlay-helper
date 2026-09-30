@@ -7,7 +7,8 @@ Nightreign Overlay Helper is a utility program developed with PyQt6, designed to
 ## Features
 
 - Displays countdowns for night rain circle shrinking and fast damage of night rain, triggered by hotkeys or automatic detection.
-- Map recognition and floating map information.
+- Map recognition and floating map information. The map seed (pattern) is recognized automatically when the full map is opened, and re-recognized automatically at the start of each expedition (Day 1) or when the last result looks unreliable.
+- Great Hollow crystal layout: from Day 2 the game marks crystals on the map; the helper recognizes these markers each time the map is opened and automatically shows the matching crystal layout (or the remaining candidate layouts).
 - Displays health percentage markers corresponding to "trigger when health is low" and "trigger when health is full" entries.
 - Displays countdowns for art buffs of certain characters.
 
@@ -53,7 +54,8 @@ The program recognizes game information by capturing screenshots of the game scr
 ## 功能
 
 - 显示缩圈和雨中冒险倒计时，支持快捷键触发或自动检测。
-- 地图识别与地图信息悬浮。
+- 地图识别与地图信息悬浮。打开完整地图时自动识别地图种子，每局开始（DAY I）或上次识别结果不可靠时会自动重新识别。
+- 大空洞水晶布局：第二天起游戏会在地图上标出水晶，每次打开地图时自动识别这些标记并显示对应的水晶布局（无法唯一确定时显示所有候选布局的合并点位）。
 - 显示“血量较低触发”与“满血时触发”的词条对应百分比血量位置标记。
 - 显示部分角色的绝招buff倒计时。
 

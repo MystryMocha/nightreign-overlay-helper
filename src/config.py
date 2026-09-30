@@ -62,6 +62,15 @@ class Config:
     default_map_pattern_match_topk: int
     max_map_pattern_match_topk: int
     min_map_pattern_match_topk: int
+    map_pattern_retry_error_threshold: float
+    map_pattern_max_retry: int
+
+    crystal_detect_hsv_lower: list[int]
+    crystal_detect_hsv_upper: list[int]
+    crystal_detect_radius: int
+    crystal_detect_max_offset: int
+    crystal_detect_threshold: float
+    crystal_detect_delay: float
 
     hpbar_region_aspect_ratio: float
     hpbar_detect_std_height: int

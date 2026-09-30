@@ -491,6 +491,15 @@ class SettingsWindow(QWidget):
         self.crystal_layout_next_input_setting_widget = InputSettingWidget(self.input)
         self.crystal_layout_next_input_setting_widget.input_triggered.connect(self.map_overlay.next_crystal_layout)
         crystal_layout_next_input_setting_layout.addWidget(self.crystal_layout_next_input_setting_widget)
+        crystal_layout_help_label = QuickTooltipLabel("?")
+        crystal_layout_help_label.setStyleSheet("color: gray; font-weight: bold;")
+        crystal_layout_help_label.setToolTip("""
+大空洞中第二天起游戏会在地图上标出水晶，
+每次打开地图时会自动识别这些标记并切换到对应的水晶布局，
+无法唯一确定时显示所有候选布局的合并点位。
+使用快捷键手动切换后，本局不再自动切换。
+        """.strip())
+        crystal_layout_next_input_setting_layout.addWidget(crystal_layout_help_label)
         self.map_detect_layout.addLayout(crystal_layout_next_input_setting_layout)
 
         crystal_layout_last_input_setting_layout = QHBoxLayout()

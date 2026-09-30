@@ -103,6 +103,13 @@ class Updater(QObject):
         self.map_overlay_visible: bool = False
         self.last_map_pattern_match_time: float = 0.0
         self.map_pattern_return_topk: int = 5
+        self.current_earth_shifting: int | None = None  # 最近一次地图识别的特殊地形
+        self.map_pattern_retry_left: int = 0            # 识别结果误差过高时剩余的自动重试次数
+        self.map_pattern_retry_on_next_open: bool = False
+        self.crystal_detect_state: DoMatchMapPatternFlag = DoMatchMapPatternFlag.FALSE
+        self.crystal_detect_start_time: float = 0.0
+        self.detected_crystals: set[int] = set()        # 本局累计识别到的水晶
+        self.crystal_layout_locked: bool = False        # 已唯一确定水晶布局
 
         self.hp_overlay = hp_overlay
         self.hp_overlay_ui_state_signal.connect(self.hp_overlay.update_ui_state)
@@ -274,9 +281,73 @@ class Updater(QObject):
 
     # =============== Map Pattern Management =============== #
 
-    def set_to_detect_map_pattern_once(self):
+    def set_to_detect_map_pattern_once(self, is_retry: bool = False):
         self.do_match_map_pattern_flag = DoMatchMapPatternFlag.PREPARE
+        self.map_pattern_retry_on_next_open = False
+        if not is_retry:
+            self.map_pattern_retry_left = Config.get().map_pattern_max_retry
+        self.reset_crystal_detection()
         info("Set to detect map pattern once.")
+
+    def reset_crystal_detect_state(self):
+        if self.crystal_detect_state == DoMatchMapPatternFlag.TRUE:
+            self.update_map_overlay_ui_state_signal.emit(MapOverlayUIState(capture_suspended=False))
+        self.crystal_detect_state = DoMatchMapPatternFlag.FALSE
+
+    def reset_crystal_detection(self):
+        self.reset_crystal_detect_state()
+        self.detected_crystals = set()
+        self.crystal_layout_locked = False
+
+    def detect_and_update_crystals(self, map_img, is_full_map: bool, map_just_opened: bool):
+        """
+        大空洞中每次打开地图时自动识别地图上标出的水晶并匹配水晶布局
+        打开地图时悬浮窗处于隐藏状态，识别完成前保持隐藏，
+        避免截图方式包含悬浮窗时把程序自己绘制的水晶图标识别进去
+        """
+        if self.crystal_detect_state == DoMatchMapPatternFlag.FALSE:
+            if not map_just_opened or self.current_earth_shifting != 4 or self.crystal_layout_locked \
+                    or self.do_match_map_pattern_flag != DoMatchMapPatternFlag.FALSE:
+                return
+            self.crystal_detect_state = DoMatchMapPatternFlag.TRUE
+            self.crystal_detect_start_time = time.time()
+            self.update_map_overlay_ui_state_signal.emit(MapOverlayUIState(capture_suspended=True))
+            return
+
+        if not is_full_map:
+            self.reset_crystal_detect_state()
+            return
+        if time.time() - self.crystal_detect_start_time < Config.get().crystal_detect_delay:
+            return
+
+        # 等待悬浮窗确实隐藏且地图完全展开后再识别
+        self.reset_crystal_detect_state()
+        result = self.detector.detect(DetectParam(
+            map_detect_param=MapDetectParam(
+                map_region=self.map_region,
+                img=map_img,
+                do_detect_crystals=True,
+                hdr_processing_enabled=self.hdr_processing_enabled,
+            )
+        ))
+
+        crystals = result.map_detect_result.crystals or set()
+        if not crystals - self.detected_crystals:
+            return
+        self.detected_crystals |= crystals
+        candidates = self.detector.map_detector.crystal_info.match_layouts(self.detected_crystals)
+        if not candidates:
+            # 累计结果冲突（可能有误识别），仅使用本次识别结果
+            candidates = self.detector.map_detector.crystal_info.match_layouts(crystals)
+            if candidates:
+                self.detected_crystals = set(crystals)
+        info(f"Detected crystals: {sorted(self.detected_crystals)}, layout candidates: {candidates}")
+        self.update_map_overlay_ui_state_signal.emit(MapOverlayUIState(
+            crystal_detection=(candidates, set(self.detected_crystals)),
+        ))
+        if len(candidates) == 1 and len(self.detected_crystals) >= 2:
+            self.crystal_layout_locked = True
+            info(f"Crystal layout locked: {candidates[0]}")
 
     def update_overlay_match_map_pattern_text(self):
         match_ready = self.do_match_map_pattern_flag != DoMatchMapPatternFlag.FALSE and self.map_detect_enabled
@@ -353,11 +424,16 @@ class Updater(QObject):
 
         is_full_map = result.map_detect_result.is_full_map
         map_img = result.map_detect_result.img
+        map_just_opened = False
         if is_full_map is not None:
             if is_full_map and not self.current_is_full_map:
                 info("Current map changed to full map.")
                 self.current_is_full_map = True
+                map_just_opened = True
                 self.show_map_overlay()
+                if self.map_pattern_retry_on_next_open:
+                    info("Retry to detect map pattern because last result is not reliable.")
+                    self.set_to_detect_map_pattern_once(is_retry=True)
             if not is_full_map and self.current_is_full_map:
                 info("Current map changed to non-full map.")
                 self.current_is_full_map = False
@@ -368,6 +444,8 @@ class Updater(QObject):
             self.set_to_detect_map_pattern_once()
             self.last_map_pattern_match_time = self.get_time()
             info("Set to detect map pattern once by interval.")
+
+        self.detect_and_update_crystals(map_img, bool(is_full_map), map_just_opened)
 
         if self.do_match_map_pattern_flag == DoMatchMapPatternFlag.PREPARE:
             # 隐藏信息显示，等待下一次更新进行识别
@@ -413,6 +491,16 @@ class Updater(QObject):
                 ))
                 self.update_map_overlay_images(result.map_detect_result.overlay_images, earth_shifting=earth_shifting)
                 self.last_map_pattern_match_time = self.get_time()
+                self.current_earth_shifting = earth_shifting
+                self.reset_crystal_detection()
+
+                # 最佳结果误差过高时（例如截图时地图还未完全展开），下次打开地图时自动重新识别
+                errors = result.map_detect_result.pattern_errors or []
+                if errors and errors[0] > Config.get().map_pattern_retry_error_threshold \
+                        and self.map_pattern_retry_left > 0:
+                    self.map_pattern_retry_left -= 1
+                    self.map_pattern_retry_on_next_open = True
+                    info(f"Best map pattern error {errors[0]} is too high, will retry on next map open.")
 
     # =============== HP Management =============== #
 

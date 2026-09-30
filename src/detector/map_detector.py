@@ -19,6 +19,7 @@ from src.detector.map_info import (
     MapPattern,
     Construct,
 )
+from src.detector.crystal_info import load_crystal_info
 from src.detector.utils import (
     paste_cv2,
     draw_icon,
@@ -234,6 +235,7 @@ class MapDetectParam:
     do_match_earth_shifting: bool = False
     do_match_pattern: bool = False
     return_pattern_topk: int | None = None
+    do_detect_crystals: bool = False
     hdr_processing_enabled: bool = False
 
 @dataclass
@@ -244,6 +246,9 @@ class MapDetectResult:
     earth_shifting_score: float | None = None
     patterns: list[dict] = None
     overlay_images: list[Image.Image] = None
+    pattern_errors: list[int] = None                    # 各识别结果的匹配误差
+    crystals: set[int] | None = None                    # 地图上识别到的水晶序号
+    crystal_layout_candidates: list[int] | None = None  # 可能的水晶布局序号
 
 
 class MapDetector:  
@@ -264,6 +269,9 @@ class MapDetector:
             gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY)
             self.map_bg_sift[map_id] = self.sift.detectAndCompute(gray, None)
         self.bf_matcher = cv2.BFMatcher()
+
+        # 大空洞水晶信息
+        self.crystal_info = load_crystal_info()
 
         # 初始化POI信息
         all_poi_construct_types = set()
@@ -376,6 +384,65 @@ class MapDetector:
         info(f"MapDetector: Match earth shifting: best map {best_map_id} matches {best_score}, time cost: {time.time() - t:.4f}s")
         return best_map_id, best_score
     
+    def _detect_crystals(self, img: np.ndarray) -> tuple[set[int], dict[int, float]]:
+        """
+        识别大空洞地图上被标记的水晶（第二天起游戏会在地图上标出水晶位置）
+        在每个已知水晶点位附近统计水晶标记颜色像素占比，并减去底图同位置的占比
+        """
+        config = Config.get()
+        t = time.time()
+        img = cv2.resize(img, STD_MAP_SIZE, interpolation=CV2_RESIZE_METHOD)
+        map_bg = open_cv2_image("maps_poi_match/4.jpg", STD_MAP_SIZE)
+        try:
+            img = align_image(img, map_bg, (
+                int(STD_MAP_SIZE[0] * 0.2),
+                int(STD_MAP_SIZE[1] * 0.2),
+                int(STD_MAP_SIZE[0] * 0.6),
+                int(STD_MAP_SIZE[1] * 0.6),
+            ))
+        except Exception as e:
+            warning(f"MapDetector: Align map image for crystal detection failed: {e}")
+
+        lower = np.array(config.crystal_detect_hsv_lower, dtype=np.uint8)
+        upper = np.array(config.crystal_detect_hsv_upper, dtype=np.uint8)
+        img_mask = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_RGB2HSV), lower, upper) > 0
+        bg_mask = cv2.inRange(cv2.cvtColor(map_bg, cv2.COLOR_RGB2HSV), lower, upper) > 0
+
+        r = config.crystal_detect_radius
+        max_offset = config.crystal_detect_max_offset
+        ys, xs = np.mgrid[-r:r+1, -r:r+1]
+        disk = (xs ** 2 + ys ** 2) <= r ** 2
+        w, h = STD_MAP_SIZE
+
+        def ratio(mask: np.ndarray, x: int, y: int) -> float:
+            if x - r < 0 or y - r < 0 or x + r + 1 > w or y + r + 1 > h:
+                return 0.0
+            return float(mask[y-r:y+r+1, x-r:x+r+1][disk].mean())
+
+        scores: dict[int, float] = {}
+        for idx, (xr, yr) in self.crystal_info.crystals.items():
+            cx, cy = int(xr * w), int(yr * h)
+            bg_ratio = ratio(bg_mask, cx, cy)
+            best = 0.0
+            for dx in range(-max_offset, max_offset + 1, 2):
+                for dy in range(-max_offset, max_offset + 1, 2):
+                    best = max(best, ratio(img_mask, cx + dx, cy + dy))
+            scores[idx] = best - bg_ratio
+
+        detected = {idx for idx, s in scores.items() if s >= config.crystal_detect_threshold}
+
+        # 保存结果用于调试
+        vis = img.copy()
+        for idx, (xr, yr) in self.crystal_info.crystals.items():
+            color = (0, 255, 0) if idx in detected else (255, 0, 0)
+            cv2.circle(vis, (int(xr * w), int(yr * h)), r + max_offset, color, 2)
+            cv2.putText(vis, f"{idx}:{scores[idx]:.2f}", (int(xr * w) + r, int(yr * h)), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+        cv2.imwrite(get_appdata_path("map_crystal_result.jpg"), cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+
+        info(f"MapDetector: Detect crystals: {sorted(detected)}, time cost: {time.time() - t:.4f}s")
+        return detected, scores
+
     def _match_nightlord(self, img: np.ndarray) -> tuple[int | None, float]:
         t = time.time()
         img = cv2.resize(img, MATCH_NIGHTLORD_SIZE, interpolation=CV2_RESIZE_METHOD)
@@ -917,6 +984,11 @@ class MapDetector:
             ret.earth_shifting = earth_shifting
             ret.earth_shifting_score = earth_shifting_score
 
+        # 大空洞水晶识别
+        if param.do_detect_crystals:
+            ret.crystals, _ = self._detect_crystals(img)
+            ret.crystal_layout_candidates = self.crystal_info.match_layouts(ret.crystals)
+
         # 地图模式匹配
         if param.do_match_pattern:
             results = self._match_map_pattern(img, param.earth_shifting, topk=param.return_pattern_topk)
@@ -934,6 +1006,7 @@ class MapDetector:
 
             ret.patterns = []
             ret.overlay_images = []
+            ret.pattern_errors = [r.error for r in results]
             for i, result in enumerate(results):
                 try:
                     info(f"MapDetector: Start to draw overlay image for pattern {result.pattern.id}")
