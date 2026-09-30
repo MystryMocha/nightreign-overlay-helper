@@ -4,7 +4,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from src.common import get_data_path
 from src.logger import warning, debug
-from src.screencap import ScreencapEngine
+from src.screencap import ScreencapEngine, ScreencapRuntimeError
 
 
 def hls_to_rgb(hls: tuple[int, int, int]) -> tuple[int, int, int]:
@@ -159,16 +159,24 @@ def grab_region(engine: ScreencapEngine, region: tuple[int, int, int, int], proc
     full_img = engine.grab_fullscreen()
     full_array = np.array(full_img)
 
+    def crop(y0: int, x0: int) -> Image.Image:
+        sub = full_array[y0:y0 + h, x0:x0 + w]
+        if sub.size == 0 or sub.shape[0] != h or sub.shape[1] != w:
+            raise ScreencapRuntimeError(
+                "grab_failed",
+                f"Captured frame {full_array.shape[1]}x{full_array.shape[0]} "
+                f"cannot contain region {region}",
+            )
+        return _apply_processing(Image.fromarray(sub), processing, region)
+
     monitors = get_monitors()
     if not monitors:
-        cropped = full_array[y:y + h, x:x + w]
-        return _apply_processing(Image.fromarray(cropped), processing, region)
+        return crop(y, x)
 
     for monitor in monitors[1:]:
         if (monitor["left"] <= x < monitor["left"] + monitor["width"] and
                 monitor["top"] <= y < monitor["top"] + monitor["height"]):
-            cropped = full_array[y:y + h, x:x + w]
-            return _apply_processing(Image.fromarray(cropped), processing, region)
+            return crop(y, x)
 
     main_screen = monitors[1]
     abs_x = x + main_screen["left"]
@@ -177,12 +185,10 @@ def grab_region(engine: ScreencapEngine, region: tuple[int, int, int, int], proc
     for monitor in monitors[1:]:
         if (monitor["left"] <= abs_x < monitor["left"] + monitor["width"] and
                 monitor["top"] <= abs_y < monitor["top"] + monitor["height"]):
-            cropped = full_array[abs_y:abs_y + h, abs_x:abs_x + w]
-            return _apply_processing(Image.fromarray(cropped), processing, region)
+            return crop(abs_y, abs_x)
 
     warning(f"Region {region} could not be mapped to any screen. Using fallback method.")
-    cropped = full_array[abs_y:abs_y + h, abs_x:abs_x + w]
-    return _apply_processing(Image.fromarray(cropped), processing, region)
+    return crop(abs_y, abs_x)
 
 
 DEFAULT_FONT_PATH = get_data_path("fonts/SourceHanSansSC-Normal.otf")
@@ -255,7 +261,7 @@ def match_template(
     return best_match, best_val
 
 
-def align_image(img: np.ndarray, target: np.ndarray, region: tuple[int, int, int, int]) -> np.ndarray:
+def align_image(img: np.ndarray, target: np.ndarray, region: tuple[int, int, int, int], return_matrix: bool = False):
     """
     使用 SIFT 特征点匹配对齐两张图像。
     仅使用 region 区域内的图像进行特征点检测和匹配，返回对齐后的整张图像。
@@ -266,7 +272,8 @@ def align_image(img: np.ndarray, target: np.ndarray, region: tuple[int, int, int
         region: (x, y, w, h) 指定用于匹配的区域坐标
         
     Returns:
-        np.ndarray: 对齐后的图像，大小与 target 一致
+        np.ndarray: 对齐后的图像，大小与 target 一致；
+        return_matrix 为 True 时返回 (对齐后的图像, 2x3 仿射矩阵 img->target)
     """
     x, y, w, h = region
     
@@ -315,7 +322,50 @@ def align_image(img: np.ndarray, target: np.ndarray, region: tuple[int, int, int
             borderMode=cv2.BORDER_CONSTANT, 
             borderValue=0
         )
+        if return_matrix:
+            return aligned_img, matrix
         return aligned_img
     else:
         raise ValueError("align_image: Could not compute affine transformation matrix.")
 
+
+
+def match_color_to_reference(img: np.ndarray, target: np.ndarray, region: tuple[int, int, int, int]) -> np.ndarray:
+    """
+    将已对齐的图像颜色校正到基准图的亮度/色调。
+    游戏内打开的地图通常比基准底图暗（界面暗化、HDR、截图时地图未完全展开等），
+    直接逐像素比较会导致POI匹配失败。这里对每个通道用 region 区域拟合 img -> target 的线性变换，
+    并剔除残差较大的像素（POI图标、标记等）后再拟合一次。
+
+    Args:
+        img: 已与 target 对齐的图像
+        target: 基准图
+        region: (x, y, w, h) 用于拟合的区域
+
+    Returns:
+        np.ndarray: 颜色校正后的图像，拟合不可靠时返回原图
+    """
+    x, y, w, h = region
+    src = img[y:y+h, x:x+w].reshape(-1, 3).astype(np.float32)
+    dst = target[y:y+h, x:x+w].reshape(-1, 3).astype(np.float32)
+    # 忽略对齐后的黑边
+    valid = src.sum(axis=1) > 0
+    src, dst = src[valid], dst[valid]
+    if len(src) < 1000:
+        return img
+
+    out = img.astype(np.float32)
+    for ch in range(3):
+        s, d = src[:, ch], dst[:, ch]
+        keep = np.ones(len(s), dtype=bool)
+        for _ in range(2):
+            if s[keep].std() < 1e-3:
+                return img
+            gain, offset = np.polyfit(s[keep], d[keep], 1)
+            residual = np.abs(gain * s + offset - d)
+            keep = residual <= max(2.0 * residual[keep].std(), 1.0)
+        if not (0.3 <= gain <= 4.0):
+            debug(f"match_color_to_reference: unreliable gain {gain:.3f} on channel {ch}, skip.")
+            return img
+        out[..., ch] = out[..., ch] * gain + offset
+    return np.clip(out, 0, 255).astype(np.uint8)

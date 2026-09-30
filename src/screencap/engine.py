@@ -28,6 +28,17 @@ class ScreencapEngine:
     def selected_method_name(self) -> str | None:
         return self._selected_method_name
 
+    @property
+    def may_capture_overlays(self) -> bool:
+        """
+        当前截图方式是否可能截到覆盖在游戏上方的其他窗口（如本程序的悬浮窗）
+        桌面复制/屏幕DC方式截取的是屏幕内容，会包含悬浮窗；FramePool/PrintWindow等窗口截图方式不会
+        """
+        name = (self._selected_method_name or "").lower()
+        if not name:
+            return True
+        return any(k in name for k in ("dxgi", "desktop", "screen"))
+
     def initialize(self, mode: ScreencapMode = ScreencapMode.AUTO) -> None:
         try:
             self._status = EngineStatus.INITIALIZING
@@ -55,7 +66,13 @@ class ScreencapEngine:
             elif mode == ScreencapMode.BACKGROUND:
                 methods = Manager.METHOD_BACKGROUND
             else:
-                methods = Manager.METHOD_ALL
+                # AUTO：排除 DXGI 桌面复制方式（全桌面 / 单窗口），
+                # 这两种方式在独占全屏/HDR下抓不到游戏画面，会导致地图识别失效；
+                # 也排除 GDI：测速时它最快而常被选中，但对 DirectX 游戏窗口只能截到白图或过期画面
+                methods = Manager.METHOD_ALL & ~(
+                    Manager.METHOD_DXGI_DESKTOP_DUP | Manager.METHOD_DXGI_DESKTOP_DUP_WINDOW
+                    | Manager.METHOD_GDI
+                )
 
             self._mgr = Manager(hwnd=hwnd, methods=methods)
 

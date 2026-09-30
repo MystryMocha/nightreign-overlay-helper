@@ -14,6 +14,8 @@ from src.ui.utils import set_widget_always_on_top
 
 
 INITIAL_TEXT = f"{APP_FULLNAME} (右键打开菜单)"
+TOP_CENTER_MARGIN = 8
+MIN_OVERLAY_OPACITY = 20  # 百分比
 
 
 @dataclass
@@ -38,6 +40,7 @@ class OverlayUIState:
     art_color: str | None = None
 
     set_x_to_center: bool = False
+    set_to_top_center: bool = False
     map_pattern_match_text: str | None = None
     hide_text: bool | None = None
 
@@ -214,15 +217,23 @@ class OverlayWidget(QWidget):
     def update_ui_state(self, state: OverlayUIState):
         if state.x is not None and state.y is not None:
             self.move(state.x, state.y)
+            # 保存的位置不在任何屏幕上（换过显示器/分辨率）时，挪回顶部居中
+            if QApplication.screenAt(self.geometry().center()) is None:
+                warning(f"Overlay position ({state.x}, {state.y}) is off-screen, moving to top center.")
+                state.set_to_top_center = True
         if state.set_x_to_center:
             screen = QApplication.primaryScreen()
             screen_geometry = screen.geometry()
             new_x = (screen_geometry.width() - self.width()) // 2
             self.move(new_x, self.y())
+        if state.set_to_top_center:
+            screen_geometry = QApplication.primaryScreen().geometry()
+            new_x = screen_geometry.x() + (screen_geometry.width() - self.width()) // 2
+            self.move(new_x, screen_geometry.y() + TOP_CENTER_MARGIN)
         if state.scale is not None:
             self._apply_scale(state.scale)
         if state.opacity is not None:
-            self.setWindowOpacity(state.opacity)
+            self.setWindowOpacity(max(MIN_OVERLAY_OPACITY / 100.0, state.opacity))
         if state.day_progress is not None:
             for i in range(4):
                 progress = min(1, max(0, (state.day_progress - i)))

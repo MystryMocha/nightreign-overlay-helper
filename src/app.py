@@ -1,7 +1,18 @@
 import sys
 import time
 import os
-from PyQt6.QtCore import QThread, Qt, pyqtSignal
+
+# assets、config.yaml 等都用相对路径，启动时先切到程序根目录
+# （管理员提权、快捷方式启动时工作目录可能是 System32，会导致图标等资源加载失败）
+if getattr(sys, "frozen", False):
+    os.chdir(os.path.dirname(sys.executable))
+else:
+    # 兼容直接运行 python src\app.py：把仓库根目录加入模块搜索路径
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _root not in sys.path:
+        sys.path.insert(0, _root)
+    os.chdir(_root)
+from PyQt6.QtCore import QThread, Qt, pyqtSignal, qInstallMessageHandler, QtMsgType
 from PyQt6.QtGui import QIcon, QAction, QCursor
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu
@@ -15,7 +26,7 @@ from src.ui.settings import SettingsWindow
 from src.ui.admin_prompt import show_admin_prompt
 from src.updater import Updater
 from src.common import APP_FULLNAME, APP_VERSION, ICON_PATH
-from src.logger import info, warning, error
+from src.logger import info, warning, error, LOG_DIR
 from src.screencap import get_engine
 
 
@@ -44,7 +55,43 @@ def log_system_and_screen_info(app: QApplication):
         warning(f"Error getting screens from QApplication: {e}")
 
 
+def log_uncaught_exception(exc_type, exc_value, exc_tb):
+    # 用 pythonw 启动时没有控制台，未捕获的异常只能写进日志
+    import traceback
+    error("Uncaught exception:\n" + "".join(traceback.format_exception(exc_type, exc_value, exc_tb)), print_trace=False)
+
+
+def enable_crash_log():
+    """
+    原生层崩溃（访问冲突、Qt fatal 等）时 Python 异常处理不会被调用，进程直接消失。
+    用 faulthandler 把崩溃时各线程的 Python 调用栈写入 logs/crash.log，并记录 Qt 自身的警告/错误信息。
+    """
+    import faulthandler
+    from datetime import datetime
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        crash_file = open(os.path.join(LOG_DIR, "crash.log"), "a", encoding="utf-8")
+        crash_file.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} app v{APP_VERSION} started =====\n")
+        crash_file.flush()
+        faulthandler.enable(file=crash_file, all_threads=True)
+        globals()["_crash_file"] = crash_file   # 保持文件打开
+    except Exception as e:
+        warning(f"Failed to enable crash log: {e}")
+
+    seen_qt_warnings: set[str] = set()
+    def qt_message_handler(mode, context, message):
+        if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+            error(f"Qt: {message}", print_trace=False)
+        elif mode == QtMsgType.QtWarningMsg and message not in seen_qt_warnings:
+            # 同一条警告只记录一次，避免每帧重复刷屏
+            seen_qt_warnings.add(message)
+            warning(f"Qt: {message}")
+    qInstallMessageHandler(qt_message_handler)
+
+
 if __name__ == "__main__":
+    sys.excepthook = log_uncaught_exception
+    enable_crash_log()
     info("=" * 40)
     info(f"Starting app v{APP_VERSION}...")
 
@@ -75,7 +122,13 @@ if __name__ == "__main__":
     
     # 创建系统托盘图标和菜单
     tray_icon = QSystemTrayIcon()
-    tray_icon.setIcon(QIcon(ICON_PATH))
+    icon = QIcon(ICON_PATH)
+    if icon.isNull():
+        # 图标为空时 Windows 不会显示托盘图标，退回系统默认图标
+        warning(f"Failed to load tray icon: {os.path.abspath(ICON_PATH)}")
+        icon = app.style().standardIcon(app.style().StandardPixmap.SP_ComputerIcon)
+    tray_icon.setIcon(icon)
+    app.setWindowIcon(icon)
     tray_icon.setToolTip(APP_FULLNAME)
 
     menu = QMenu()
@@ -86,12 +139,33 @@ if __name__ == "__main__":
         settings_window.raise_()
     settings_action.triggered.connect(show_settings)
     menu.addAction(settings_action)
+    timer_visible_action = QAction("显示计时器")
+    timer_visible_action.setCheckable(True)
+    timer_visible_action.setChecked(settings_window.timer_visible_checkbox.isChecked())
+    timer_visible_action.toggled.connect(settings_window.timer_visible_checkbox.setChecked)
+    settings_window.timer_visible_checkbox.toggled.connect(timer_visible_action.setChecked)
+    menu.addAction(timer_visible_action)
+    recover_timer_action = QAction("找回计时器（重置位置/大小/透明度）")
+    recover_timer_action.triggered.connect(settings_window.recover_timer)
+    menu.addAction(recover_timer_action)
+    map_detect_action = QAction("启用地图识别")
+    map_detect_action.setCheckable(True)
+    map_detect_action.setChecked(settings_window.map_detect_enable_checkbox.isChecked())
+    map_detect_action.toggled.connect(settings_window.map_detect_enable_checkbox.setChecked)
+    settings_window.map_detect_enable_checkbox.toggled.connect(map_detect_action.setChecked)
+    menu.addAction(map_detect_action)
+    menu.addSeparator()
     quit_action = QAction("退出")
     quit_action.triggered.connect(app.quit)
     menu.addAction(quit_action)
-    menu.addSeparator()
     tray_icon.setContextMenu(menu)
+    # 左键单击托盘图标直接打开设置
+    def on_tray_activated(reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            show_settings()
+    tray_icon.activated.connect(on_tray_activated)
     tray_icon.show()
+    info(f"Tray icon shown: available={QSystemTrayIcon.isSystemTrayAvailable()}, visible={tray_icon.isVisible()}, cwd={os.getcwd()}")
     
     def show_menu_at_cursor_pos():
         cursor_pos = QCursor.pos()

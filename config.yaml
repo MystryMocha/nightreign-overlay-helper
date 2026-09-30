@@ -46,7 +46,8 @@ fixed_map_overlay_draw_size: null       # 固定地图信息绘制尺寸(宽,高
 map_overlay_draw_size_ratio: 1.0        # 地图信息绘制尺寸相对于原图比例
 full_map_hough_circle_thres: [150, 200, 250]  # 判断完整地图时霍夫圆检测阈值列表
 full_map_error_threshold: 20            # 判断当前地图是否是完整地图的误差阈值
-earth_shifting_error_threshold: 50      # 判断特殊地形的误差阈值
+default_map_region_ratio: [0.5674, 0.1556, 0.6657]  # 未手动设置地图区域时使用的默认区域(x/界面宽, y/界面高, 边长/界面高)，界面为居中的16:9区域
+earth_shifting_min_matches: 150         # 判断特殊地形所需的最少SIFT匹配特征点数
 map_pattern_match_interval: 2100        # 自动地图匹配间隔(秒)
 subicon_template_match_threshold: 0.06  # POI子图标模板匹配分数阈值，高于的视为无子图标
 poi_match_sample_ratio_w_nightlord: 1.0      # 已匹配夜王时POI匹配采样点数量
@@ -54,6 +55,13 @@ poi_match_sample_ratio_wo_nightlord: 1.0     # 未匹配夜王时POI匹配采样
 default_map_pattern_match_topk: 5            # 地图识别返回的最佳结果数量默认值
 max_map_pattern_match_topk: 10               # 地图识别返回的最佳结果数量最大值
 min_map_pattern_match_topk: 1                # 地图识别返回的最佳结果数量最小值
+map_pattern_retry_error_threshold: 60        # 最佳识别结果误差高于此值时，下次打开地图自动重新识别
+map_pattern_max_retry: 2                     # 识别结果误差过高时的最大自动重试次数
+
+# 大空洞水晶布局自动识别（识别地图上已被破除的水晶图标，可在设置中关闭）
+crystal_detect_max_offset: 14             # 水晶图标相对点位允许偏移(750x750标准地图坐标)
+crystal_detect_threshold: 0.52            # 已破除水晶图标模板匹配分数阈值，高于视为该水晶已破除
+crystal_detect_delay: 0.4                 # 打开地图后等待多久再识别水晶(秒)
 
 hpbar_region_aspect_ratio: 125        # 血条区域宽高比
 hpbar_detect_std_height: 15           # 血条检测标准高度

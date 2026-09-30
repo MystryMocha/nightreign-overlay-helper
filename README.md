@@ -7,7 +7,8 @@ Nightreign Overlay Helper is a utility program developed with PyQt6, designed to
 ## Features
 
 - Displays countdowns for night rain circle shrinking and fast damage of night rain, triggered by hotkeys or automatic detection.
-- Map recognition and floating map information.
+- Map recognition and floating map information. The map seed (pattern) is recognized automatically when the full map is opened, and re-recognized automatically at the start of each expedition (Day 1) or when the last result looks unreliable.
+- Great Hollow crystal layout: from Day 2 the game marks crystals on the map; the helper recognizes these markers each time the map is opened and automatically shows the matching crystal layout (or the remaining candidate layouts).
 - Displays health percentage markers corresponding to "trigger when health is low" and "trigger when health is full" entries.
 - Displays countdowns for art buffs of certain characters.
 
@@ -33,6 +34,8 @@ Nightreign Overlay Helper is a utility program developed with PyQt6, designed to
 ## Usage
 Double-click `nightreign-overlay-helper.exe` to run the program. Right-click the overlay window or the taskbar icon to open the menu and access the settings window. Refer to the help in the settings UI for configuration guidance.
 
+To run from source without building, double-click `start.bat` in the repository root. It requests administrator privileges, installs dependencies on first run and starts the app without a console window.
+
 ## Safety
 The program recognizes game information by capturing screenshots of the game screen, without modifying game data or reading/writing to game memory.
 
@@ -53,7 +56,8 @@ The program recognizes game information by capturing screenshots of the game scr
 ## 功能
 
 - 显示缩圈和雨中冒险倒计时，支持快捷键触发或自动检测。
-- 地图识别与地图信息悬浮。
+- 地图识别与地图信息悬浮。打开完整地图时自动识别地图种子，每局开始（DAY I）或上次识别结果不可靠时会自动重新识别。
+- 大空洞水晶布局：破除水晶后游戏会在地图上显示灰色水晶图标，每次打开地图时自动识别这些图标，并切换到包含所有已破除水晶的布局（无法唯一确定时显示所有候选布局的合并点位），也可用快捷键手动切换。
 - 显示“血量较低触发”与“满血时触发”的词条对应百分比血量位置标记。
 - 显示部分角色的绝招buff倒计时。
 
@@ -80,6 +84,8 @@ The program recognizes game information by capturing screenshots of the game scr
 ## 使用方法
 
 双击 nightreign-overlay-helper.exe 运行程序，直接右键悬浮窗或右键任务栏图标打开菜单打开设置窗口，参考设置界面中的帮助进行配置。
+
+不想打包也可以直接双击仓库根目录的 `start.bat` 从源码运行：它会自动申请管理员权限，首次运行自动安装依赖，启动后不保留命令行窗口。
 
 ## 安全性
 

@@ -10,7 +10,7 @@ import random
 import gc
 
 from src.config import Config
-from src.logger import info, warning, error, debug
+from src.logger import info, warning, error, debug, is_debug_enabled
 from src.common import get_appdata_path, get_data_path
 from src.detector.map_info import (
     load_map_info, 
@@ -19,6 +19,7 @@ from src.detector.map_info import (
     MapPattern,
     Construct,
 )
+from src.detector.crystal_info import load_crystal_info
 from src.detector.utils import (
     paste_cv2,
     draw_icon,
@@ -26,6 +27,7 @@ from src.detector.utils import (
     grab_region,
     match_template,
     align_image,
+    match_color_to_reference,
 )
 
 
@@ -54,28 +56,24 @@ def open_cv2_image(path: str, size: tuple[int, int] | None = None) -> np.ndarray
 
 CHECK_FULL_MAP_STD_SIZE = (100, 100)
 
-MATCH_EARTH_SHIFTING_SIZE = (100, 100)
-MATCH_EARTH_SHIFTING_REGION = (
-    int(MATCH_EARTH_SHIFTING_SIZE[0] * 0.2),
-    int(MATCH_EARTH_SHIFTING_SIZE[1] * 0.2),
-    int(MATCH_EARTH_SHIFTING_SIZE[0] * 0.6),
-    int(MATCH_EARTH_SHIFTING_SIZE[1] * 0.6),
-)
-MATCH_EARTH_SHIFTING_OFFSET_AND_STRIDE = (5, 1)
-MATCH_EARTH_SHIFTING_SCALES = (0.95, 1.05, 7)
-
 MAP_BGS = { i : open_cv2_image(f"maps/{i}.jpg") for i in range(6) }
+
+# 地形识别：用 SIFT 特征点匹配数量判断地图底图（对颜色/亮度不敏感，
+# 且能有效区分 大空洞 与普通地形，避免被色彩差异误导）
+MATCH_EARTH_SHIFTING_SIFT_SIZE = (750, 750)
+MATCH_EARTH_SHIFTING_MASK_RATIO = 0.46
+
 MAG_BG_FOR_POI_MATCH_INDEX_MAP = {
     # 除了大空洞，其他使用普通地图背景进行POI匹配（因为特殊地形内不会匹配，所以没有问题）
     0: 0, 1: 0, 2: 0, 3: 0, 4: 4, 5: 0,
 }
 
-MATCH_NIGHTLORD_SIZE = (300, 300)
+MATCH_NIGHTLORD_SIZE = (600, 600)
 NIGHTLORD_ICONS = { i : open_pil_image(f"icons/nightlord/{i}.png") for i in range(10) }
 EVERNIGHT_NIGHTLORD_ICONS = { i : open_pil_image(f"icons/nightlord/e{i}.png") for i in range(9) }
 UNKNOWN_NIGHTLORD_ICON = open_pil_image("icons/nightlord/unk.png")
 NIGHTLORD_ICON_BG = open_pil_image("icons/nightlord/bg.png")
-MATCH_NIGHTLORD_SCALES = (0.9, 1.1, 7)
+MATCH_NIGHTLORD_SCALES = (0.75, 1.2, 10)
 
 POI_ICON_SCALE = { 
     30: 0.35, 32: 0.5, 34: 0.4, 37: 0.4, 38: 0.3, 40: 0.4, 41: 0.38, 
@@ -238,6 +236,7 @@ class MapDetectParam:
     do_match_earth_shifting: bool = False
     do_match_pattern: bool = False
     return_pattern_topk: int | None = None
+    do_detect_crystals: bool = False
     hdr_processing_enabled: bool = False
 
 @dataclass
@@ -248,6 +247,9 @@ class MapDetectResult:
     earth_shifting_score: float | None = None
     patterns: list[dict] = None
     overlay_images: list[Image.Image] = None
+    pattern_errors: list[int] = None                    # 各识别结果的匹配误差
+    crystals: set[int] | None = None                    # 地图上识别到的水晶序号
+    crystal_layout_candidates: list[int] | None = None  # 可能的水晶布局序号
 
 
 class MapDetector:  
@@ -259,6 +261,20 @@ class MapDetector:
             get_data_path('csv/names.csv'),
             get_data_path('csv/positions.csv'),
         )
+
+        # 初始化地形识别用的SIFT特征
+        self.sift = cv2.SIFT_create()
+        self.map_bg_sift: dict[int, tuple] = {}
+        for map_id, map_img in MAP_BGS.items():
+            resized = cv2.resize(map_img, MATCH_EARTH_SHIFTING_SIFT_SIZE, interpolation=CV2_RESIZE_METHOD)
+            gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY)
+            self.map_bg_sift[map_id] = self.sift.detectAndCompute(gray, None)
+        self.bf_matcher = cv2.BFMatcher()
+
+        # 大空洞水晶信息
+        self.crystal_info = load_crystal_info()
+        self.crystal_marker: tuple[np.ndarray, np.ndarray] | None = None  # 已破除水晶图标模板(灰度, 掩码)
+        self.last_align_matrix: np.ndarray | None = None  # 最近一次地图识别时 截图->标准地图 的仿射矩阵(标准地图坐标)
 
         # 初始化POI信息
         all_poi_construct_types = set()
@@ -312,7 +328,7 @@ class MapDetector:
             # display_pil_image(target_img, None)
             h, w = target_img.size
             target_img = target_img.crop((int(w*0.3), int(h*0.3), int(w*0.7), int(h*0.7)))
-            nightlords[i] = (nightlord, np.array(target_img)[..., :3])
+            nightlords[i] = (nightlord, cv2.cvtColor(np.array(target_img)[..., :3], cv2.COLOR_RGB2GRAY))
         self.nightlord_icons: list[tuple[None | int, np.ndarray]] = nightlords
             
         
@@ -322,75 +338,163 @@ class MapDetector:
         img = cv2.resize(img, CHECK_FULL_MAP_STD_SIZE, interpolation=CV2_RESIZE_METHOD)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         circles = []
-        for thres in config.full_map_hough_circle_thres:
-            res = cv2.HoughCircles(
-                gray, 
-                cv2.HOUGH_GRADIENT, 
-                dp=1, 
-                minDist=20,
-                param1=thres,
-                param2=30, 
-                minRadius=int(img.shape[0] * 0.4), 
-                maxRadius=int(img.shape[0] * 0.5)
-            )
-            if res is not None:
-                circles.extend(res)
+        # 边缘清晰度随画质/缩放变化，累加器阈值从严到宽依次尝试，找到圆就停止
+        for acc_thres in (30, 25):
+            for thres in config.full_map_hough_circle_thres:
+                res = cv2.HoughCircles(
+                    gray,
+                    cv2.HOUGH_GRADIENT,
+                    dp=1,
+                    minDist=20,
+                    param1=thres,
+                    param2=acc_thres,
+                    minRadius=int(img.shape[0] * 0.4),
+                    maxRadius=int(img.shape[0] * 0.5)
+                )
+                if res is not None:
+                    circles.extend(res[0])
+            if circles:
+                break
         error = float('inf')
         if circles:
-            cx, cy, cr = sorted(list(circles[0]), key=lambda x: x[2], reverse=True)[0]
-            # cv2.circle(img, (int(cx), int(cy)), int(cr), (0, 255, 0), 2)
-            # cv2.circle(img, (int(cx), int(cy)), 2, (0, 0, 255), 3)
-            # cv2.imwrite("sandbox/full_map_test.jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-            error = abs(cr - img.shape[0] * 0.425) ** 2
+            # 取半径最接近夜王徽章圆框的圆
+            error = min(abs(cr - img.shape[0] * 0.425) ** 2 for _, _, cr in circles)
         debug(f"MapDetector: Full map match error: {error:.4f}")
         return error
     
-    def _match_earth_shifting(self, img: np.ndarray) -> tuple[int, float]:
+    def _match_earth_shifting(self, img: np.ndarray) -> tuple[int, int]:
         t = time.time()
-        img = cv2.resize(img, MATCH_EARTH_SHIFTING_SIZE, interpolation=CV2_RESIZE_METHOD)
-        x, y, w, h = MATCH_EARTH_SHIFTING_REGION
-        img = img[y:y+h, x:x+w].astype(int)
-        best_map_id, best_score = None, float('inf')
-        offset, stride = MATCH_EARTH_SHIFTING_OFFSET_AND_STRIDE
-        min_scale, max_scale, scale_num = MATCH_EARTH_SHIFTING_SCALES
-        for map_id, map_img in MAP_BGS.items():
-            score = float('inf')
-            for scale in np.linspace(min_scale, max_scale, scale_num, endpoint=True):
-                size = (int(MATCH_EARTH_SHIFTING_SIZE[0] * scale), int(MATCH_EARTH_SHIFTING_SIZE[1] * scale))
-                map_resized = cv2.resize(map_img, size, interpolation=CV2_RESIZE_METHOD).astype(int)
-                for dx in range(-offset, offset+1, stride):
-                    for dy in range(-offset, offset+1, stride):
-                        map_shifted = map_resized[y+dy:y+h+dy, x+dx:x+w+dx]
-                        diff = np.abs((img - map_shifted))
-                        diff[diff > 100] = 0
-                        diff = np.linalg.norm(diff, axis=2)
-                        cur_score = np.median(diff)
-                        score = min(score, cur_score)
-            # print(f"map {map_id} score: {score:.4f}")
-            if score < best_score:
+        img = cv2.resize(img, MATCH_EARTH_SHIFTING_SIFT_SIZE, interpolation=CV2_RESIZE_METHOD)
+        w, h = MATCH_EARTH_SHIFTING_SIFT_SIZE
+        # 屏蔽地图圆形区域外的游戏画面，避免干扰特征匹配
+        mask = np.zeros((h, w), np.uint8)
+        cv2.circle(mask, (w // 2, h // 2), int(min(w, h) * MATCH_EARTH_SHIFTING_MASK_RATIO), 255, -1)
+        img = img.copy()
+        img[mask == 0] = 0
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        _, des = self.sift.detectAndCompute(gray, None)
+
+        best_map_id, best_score = None, -1
+        for map_id, (_, ref_des) in self.map_bg_sift.items():
+            if des is None or ref_des is None:
+                score = 0
+            else:
+                matches = self.bf_matcher.knnMatch(des, ref_des, k=2)
+                score = sum(1 for m, n in matches if m.distance < 0.75 * n.distance)
+            # print(f"map {map_id} matches: {score}")
+            if score > best_score:
                 best_score = score
                 best_map_id = map_id
-        info(f"MapDetector: Match earth shifting: best map {best_map_id} score {best_score:.4f}, time cost: {time.time() - t:.4f}s")
+        info(f"MapDetector: Match earth shifting: best map {best_map_id} matches {best_score}, time cost: {time.time() - t:.4f}s")
         return best_map_id, best_score
     
-    def _match_nightlord(self, img: np.ndarray) -> tuple[int | None, float]:
+    def _detect_crystals(self, img: np.ndarray) -> tuple[set[int], dict[int, float]]:
+        """
+        识别大空洞地图上已被破除的水晶：游戏会在被破除的水晶位置显示灰色水晶图标
+        对齐底图后，在每个已知水晶点位附近用带掩码的模板匹配查找该图标
+        """
+        config = Config.get()
         t = time.time()
-        img = cv2.resize(img, MATCH_NIGHTLORD_SIZE, interpolation=CV2_RESIZE_METHOD)
+        img = cv2.resize(img, STD_MAP_SIZE, interpolation=CV2_RESIZE_METHOD)
+        map_bg = open_cv2_image("maps_poi_match/4.jpg", STD_MAP_SIZE)
+        try:
+            img = align_image(img, map_bg, (
+                int(STD_MAP_SIZE[0] * 0.2),
+                int(STD_MAP_SIZE[1] * 0.2),
+                int(STD_MAP_SIZE[0] * 0.6),
+                int(STD_MAP_SIZE[1] * 0.6),
+            ))
+        except Exception as e:
+            warning(f"MapDetector: Align map image for crystal detection failed: {e}")
+
+        if self.crystal_marker is None:
+            marker = np.array(open_pil_image("icons/crystal/destroyed_marker.png"))
+            self.crystal_marker = (
+                cv2.cvtColor(marker[..., :3], cv2.COLOR_RGB2GRAY),
+                marker[..., 3].copy(),
+            )
+        tmpl, tmpl_mask = self.crystal_marker
+        th, tw = tmpl.shape
+        # 模板左上角相对水晶点位的偏移（图标在点位的正下方偏一点）
+        ox, oy = -tw // 2, -10
+
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        max_offset = config.crystal_detect_max_offset
+        w, h = STD_MAP_SIZE
+
+        scores: dict[int, float] = {}
+        for idx, (xr, yr) in self.crystal_info.crystals.items():
+            x0 = int(xr * w) + ox - max_offset
+            y0 = int(yr * h) + oy - max_offset
+            x1, y1 = x0 + tw + 2 * max_offset, y0 + th + 2 * max_offset
+            if x0 < 0 or y0 < 0 or x1 > w or y1 > h:
+                scores[idx] = 0.0
+                continue
+            res = cv2.matchTemplate(gray[y0:y1, x0:x1], tmpl, cv2.TM_CCOEFF_NORMED, mask=tmpl_mask)
+            res[~np.isfinite(res)] = 0
+            scores[idx] = float(res.max())
+
+        detected = {idx for idx, s in scores.items() if s >= config.crystal_detect_threshold}
+
+        # 保存结果用于调试
+        vis = img.copy()
+        for idx, (xr, yr) in self.crystal_info.crystals.items():
+            color = (0, 255, 0) if idx in detected else (255, 0, 0)
+            cx, cy = int(xr * w), int(yr * h)
+            cv2.rectangle(vis, (cx + ox - max_offset, cy + oy - max_offset),
+                          (cx + ox + tw + max_offset, cy + oy + th + max_offset), color, 1)
+            cv2.putText(vis, f"{idx}:{scores[idx]:.2f}", (cx + ox + tw + max_offset, cy),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+        cv2.imwrite(get_appdata_path("map_crystal_result.jpg"), cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+
+        info(f"MapDetector: Detect destroyed crystals: {sorted(detected)}, "
+             f"scores: { {k: round(v, 2) for k, v in sorted(scores.items())} }, time cost: {time.time() - t:.4f}s")
+        return detected, scores
+
+    def _warp_overlay_to_capture(self, overlay_img: Image.Image) -> Image.Image:
+        """
+        悬浮窗内容按标准地图坐标绘制，而截图中的地图可能因区域框选/推算误差有少量偏移和缩放，
+        用识别时对齐得到的矩阵的逆变换把悬浮窗内容变换到截图中地图的实际位置
+        """
+        m = self.last_align_matrix
+        if m is None:
+            return overlay_img
+        scale = float(np.hypot(m[0, 0], m[0, 1]))
+        max_shift = max(abs(m[0, 2]), abs(m[1, 2])) / STD_MAP_SIZE[0]
+        # 偏差过大说明对齐本身不可靠，保持原样
+        if not (0.9 <= scale <= 1.1) or max_shift > 0.1:
+            return overlay_img
+        w, h = overlay_img.size
+        k = w / STD_MAP_SIZE[0]
+        m = m.astype(np.float64).copy()
+        m[:, 2] *= k
+        inv = cv2.invertAffineTransform(m)
+        arr = np.array(overlay_img.convert("RGBA"))
+        arr = cv2.warpAffine(arr, inv, (w, h), flags=cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+        return Image.fromarray(arr, "RGBA")
+
+    def _match_nightlord(self, img: np.ndarray) -> tuple[int | None, float]:
+        """
+        在地图左下角的夜王徽章区域匹配夜王图标
+        使用灰度归一化相关系数匹配，对游戏画面与图标素材的亮度/色调差异不敏感
+        返回 (夜王, 分数)，分数越小越好
+        """
+        t = time.time()
+        img = cv2.resize(img, MATCH_NIGHTLORD_SIZE, interpolation=cv2.INTER_AREA)
         h, w = img.shape[0], img.shape[1]
-        img = img[-int(h*0.15):-int(h*0.05), int(w*0.06):int(w*0.16)]
+        img = cv2.cvtColor(img[int(h*0.78):int(h*0.99), int(w*0.005):int(w*0.215)], cv2.COLOR_RGB2GRAY)
 
         best_nightlord, best_score = None, float('inf')
-        
         for nightlord, icon in self.nightlord_icons:
-            match_result, score = match_template(
-                img, 
-                icon, 
-                MATCH_NIGHTLORD_SCALES
-            )
-            # print(f"nightlord {nightlord} score: {score:.4f}")
-            if score < best_score:
-                best_score = score
-                best_nightlord = nightlord
+            for scale in np.linspace(*MATCH_NIGHTLORD_SCALES):
+                tmpl = cv2.resize(icon, (int(icon.shape[1] * scale), int(icon.shape[0] * scale)))
+                if tmpl.shape[0] > img.shape[0] or tmpl.shape[1] > img.shape[1]:
+                    continue
+                score = 1.0 - float(cv2.matchTemplate(img, tmpl, cv2.TM_CCOEFF_NORMED).max())
+                if score < best_score:
+                    best_score = score
+                    best_nightlord = nightlord
 
         info(f"MapDetector: Match nightlord: best nightlord {best_nightlord} score {best_score:.4f}, time cost: {time.time() - t:.4f}s")
         return best_nightlord, best_score
@@ -549,6 +653,7 @@ class MapDetector:
 
         # 识别夜王
         nightlord, _ = self._match_nightlord(img)
+        self.last_align_matrix = None
 
         # 校准偏移
         map_bg = open_cv2_image(f"maps_poi_match/{MAG_BG_FOR_POI_MATCH_INDEX_MAP[earth_shifting]}.jpg")
@@ -561,10 +666,21 @@ class MapDetector:
                 int(STD_MAP_SIZE[0] * 0.6),
                 int(STD_MAP_SIZE[1] * 0.6),
             )
-            img = align_image(img, map_bg, ALIGN_REGION)
-            info(f"MapDetector: Align map image time cost: {time.time() - align_t:.4f}s")
+            img, align_matrix = align_image(img, map_bg, ALIGN_REGION, return_matrix=True)
+            self.last_align_matrix = align_matrix
+            scale = float(np.hypot(align_matrix[0, 0], align_matrix[0, 1]))
+            info(f"MapDetector: Align map image scale {scale:.4f} shift ({align_matrix[0, 2]:.1f}, {align_matrix[1, 2]:.1f}), "
+                 f"time cost: {time.time() - align_t:.4f}s")
         except Exception as e:
             warning(f"MapDetector: Align map image failed: {e}")
+
+        # 校正亮度/色调：游戏内地图通常比底图暗，不校正时POI逐像素匹配容易出错（大空洞POI点少，尤其明显）
+        img = match_color_to_reference(img, map_bg, (
+            int(STD_MAP_SIZE[0] * 0.15),
+            int(STD_MAP_SIZE[1] * 0.15),
+            int(STD_MAP_SIZE[0] * 0.7),
+            int(STD_MAP_SIZE[1] * 0.7),
+        ))
 
         # 识别POI
         poi_result: dict[Position, int] = {}
@@ -895,16 +1011,29 @@ class MapDetector:
 
         # 判断是否是全图
         if param.do_match_full_map:
+            if is_debug_enabled():
+                try:
+                    cv2.imwrite(
+                        get_appdata_path("debug_map_input.jpg"),
+                        cv2.cvtColor(img, cv2.COLOR_RGB2BGR),
+                    )
+                except Exception:
+                    pass
             full_map_error = self._match_full_map(img)
             ret.is_full_map = full_map_error <= config.full_map_error_threshold
 
         # 判断特殊地形
         if param.do_match_earth_shifting:
             earth_shifting, earth_shifting_score = self._match_earth_shifting(img)
-            if earth_shifting_score > config.earth_shifting_error_threshold:
+            if earth_shifting_score < config.earth_shifting_min_matches:
                 earth_shifting = None
             ret.earth_shifting = earth_shifting
             ret.earth_shifting_score = earth_shifting_score
+
+        # 大空洞水晶识别
+        if param.do_detect_crystals:
+            ret.crystals, _ = self._detect_crystals(img)
+            ret.crystal_layout_candidates = self.crystal_info.match_layouts(ret.crystals)
 
         # 地图模式匹配
         if param.do_match_pattern:
@@ -923,10 +1052,12 @@ class MapDetector:
 
             ret.patterns = []
             ret.overlay_images = []
+            ret.pattern_errors = [r.error for r in results]
             for i, result in enumerate(results):
                 try:
                     info(f"MapDetector: Start to draw overlay image for pattern {result.pattern.id}")
                     overlay_img = self._draw_overlay_image(result, draw_size, i)
+                    overlay_img = self._warp_overlay_to_capture(overlay_img)
                     ret.overlay_images.append(overlay_img)
                     ret.patterns.append(result.pattern)
                     gc.collect()
