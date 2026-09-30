@@ -68,12 +68,12 @@ MAG_BG_FOR_POI_MATCH_INDEX_MAP = {
     0: 0, 1: 0, 2: 0, 3: 0, 4: 4, 5: 0,
 }
 
-MATCH_NIGHTLORD_SIZE = (300, 300)
+MATCH_NIGHTLORD_SIZE = (600, 600)
 NIGHTLORD_ICONS = { i : open_pil_image(f"icons/nightlord/{i}.png") for i in range(10) }
 EVERNIGHT_NIGHTLORD_ICONS = { i : open_pil_image(f"icons/nightlord/e{i}.png") for i in range(9) }
 UNKNOWN_NIGHTLORD_ICON = open_pil_image("icons/nightlord/unk.png")
 NIGHTLORD_ICON_BG = open_pil_image("icons/nightlord/bg.png")
-MATCH_NIGHTLORD_SCALES = (0.9, 1.1, 7)
+MATCH_NIGHTLORD_SCALES = (0.75, 1.2, 10)
 
 POI_ICON_SCALE = { 
     30: 0.35, 32: 0.5, 34: 0.4, 37: 0.4, 38: 0.3, 40: 0.4, 41: 0.38, 
@@ -327,7 +327,7 @@ class MapDetector:
             # display_pil_image(target_img, None)
             h, w = target_img.size
             target_img = target_img.crop((int(w*0.3), int(h*0.3), int(w*0.7), int(h*0.7)))
-            nightlords[i] = (nightlord, np.array(target_img)[..., :3])
+            nightlords[i] = (nightlord, cv2.cvtColor(np.array(target_img)[..., :3], cv2.COLOR_RGB2GRAY))
         self.nightlord_icons: list[tuple[None | int, np.ndarray]] = nightlords
             
         
@@ -451,23 +451,26 @@ class MapDetector:
         return detected, scores
 
     def _match_nightlord(self, img: np.ndarray) -> tuple[int | None, float]:
+        """
+        在地图左下角的夜王徽章区域匹配夜王图标
+        使用灰度归一化相关系数匹配，对游戏画面与图标素材的亮度/色调差异不敏感
+        返回 (夜王, 分数)，分数越小越好
+        """
         t = time.time()
-        img = cv2.resize(img, MATCH_NIGHTLORD_SIZE, interpolation=CV2_RESIZE_METHOD)
+        img = cv2.resize(img, MATCH_NIGHTLORD_SIZE, interpolation=cv2.INTER_AREA)
         h, w = img.shape[0], img.shape[1]
-        img = img[-int(h*0.15):-int(h*0.05), int(w*0.06):int(w*0.16)]
+        img = cv2.cvtColor(img[int(h*0.78):int(h*0.99), int(w*0.005):int(w*0.215)], cv2.COLOR_RGB2GRAY)
 
         best_nightlord, best_score = None, float('inf')
-        
         for nightlord, icon in self.nightlord_icons:
-            match_result, score = match_template(
-                img, 
-                icon, 
-                MATCH_NIGHTLORD_SCALES
-            )
-            # print(f"nightlord {nightlord} score: {score:.4f}")
-            if score < best_score:
-                best_score = score
-                best_nightlord = nightlord
+            for scale in np.linspace(*MATCH_NIGHTLORD_SCALES):
+                tmpl = cv2.resize(icon, (int(icon.shape[1] * scale), int(icon.shape[0] * scale)))
+                if tmpl.shape[0] > img.shape[0] or tmpl.shape[1] > img.shape[1]:
+                    continue
+                score = 1.0 - float(cv2.matchTemplate(img, tmpl, cv2.TM_CCOEFF_NORMED).max())
+                if score < best_score:
+                    best_score = score
+                    best_nightlord = nightlord
 
         info(f"MapDetector: Match nightlord: best nightlord {best_nightlord} score {best_score:.4f}, time cost: {time.time() - t:.4f}s")
         return best_nightlord, best_score
