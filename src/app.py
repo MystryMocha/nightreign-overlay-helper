@@ -1,6 +1,13 @@
 import sys
 import time
 import os
+
+# 兼容直接运行 python src\app.py：把仓库根目录加入模块搜索路径并切换工作目录
+if not getattr(sys, "frozen", False):
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _root not in sys.path:
+        sys.path.insert(0, _root)
+    os.chdir(_root)
 from PyQt6.QtCore import QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QCursor
 from PyQt6.QtWidgets import (
@@ -44,7 +51,14 @@ def log_system_and_screen_info(app: QApplication):
         warning(f"Error getting screens from QApplication: {e}")
 
 
+def log_uncaught_exception(exc_type, exc_value, exc_tb):
+    # 用 pythonw 启动时没有控制台，未捕获的异常只能写进日志
+    import traceback
+    error("Uncaught exception:\n" + "".join(traceback.format_exception(exc_type, exc_value, exc_tb)), print_trace=False)
+
+
 if __name__ == "__main__":
+    sys.excepthook = log_uncaught_exception
     info("=" * 40)
     info(f"Starting app v{APP_VERSION}...")
 

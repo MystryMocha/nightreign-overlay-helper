@@ -1,6 +1,6 @@
 import yaml
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 from .common import load_yaml, save_yaml, get_appdata_path
 
@@ -118,7 +118,8 @@ class Config:
             base.update({k: v for k, v in override.items() if k in base})
             _config = base
             _config_mtime = mtime
-        return Config(**_config)
+        # 忽略当前版本不认识的字段，避免 config.yaml 比程序新时整个检测线程崩溃
+        return Config(**{k: v for k, v in _config.items() if k in _CONFIG_FIELDS})
 
     @staticmethod
     def get_default(key: str):
@@ -149,3 +150,5 @@ class Config:
         for k in (keys if keys is not None else list(override.keys())):
             override.pop(k, None)
         save_yaml(get_config_override_path(), override)
+
+_CONFIG_FIELDS = {f.name for f in fields(Config)}

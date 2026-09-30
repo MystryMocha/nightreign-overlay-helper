@@ -1,4 +1,5 @@
 import ctypes
+import os
 import sys
 
 from PyQt6.QtCore import QTimer
@@ -8,6 +9,9 @@ from PyQt6.QtWidgets import QMessageBox
 from src.common import APP_FULLNAME, ICON_PATH
 from src.logger import info, warning, error
 
+
+# 仓库根目录（src 的上一级），源码方式提权重启时作为工作目录
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 NOTICE_BODY = (
     "如不以管理员模式启动，将导致游戏过程中无法正常监听按键，"
@@ -42,12 +46,15 @@ def relaunch_as_admin() -> bool:
             # PyInstaller 打包环境：直接重启 exe 本身
             target = sys.executable
             params = None
+            workdir = os.path.dirname(sys.executable)
         else:
-            # 源码环境：用当前解释器重新运行入口脚本
+            # 源码环境：以模块方式运行，并把工作目录设为仓库根目录，
+            # 否则 python src\app.py 会找不到 src 包，config.yaml 等相对路径也会失效
             target = sys.executable
-            params = f'"{sys.argv[0]}"'
+            params = "-m src.app"
+            workdir = PROJECT_ROOT
 
-        ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", target, params, None, SW_SHOWNORMAL)
+        ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", target, params, workdir, SW_SHOWNORMAL)
         if ret > 32:
             info("Relaunch as administrator requested successfully.")
             return True
