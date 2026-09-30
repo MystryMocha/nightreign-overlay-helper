@@ -289,7 +289,7 @@ class SettingsWindow(QWidget):
         form.addRow(make_row(self.timer_visible_checkbox, self.hide_text_checkbox))
 
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
-        self.size_slider.setRange(5, 1000)
+        self.size_slider.setRange(30, 1000)
         self.size_slider.setValue(self.overlay.width())
         self.size_value_label = make_value_label()
         self.size_slider.valueChanged.connect(self.update_overlay_size)
@@ -1054,6 +1054,17 @@ class SettingsWindow(QWidget):
     def update_overlay_position_top_center(self):
         self.update_overlay_ui_state_signal.emit(OverlayUIState(set_to_top_center=True))
         info("Overlay position set to top center")
+
+    def recover_timer(self):
+        """找回计时器：打开显示、恢复可见的大小和不透明度，并移到顶部居中"""
+        self.timer_visible_checkbox.setChecked(True)
+        if self.opacity_slider.value() < 60:
+            self.opacity_slider.setValue(60)
+        if self.size_slider.value() < 100:
+            self.size_slider.setValue(100)
+        self.update_overlay_position_top_center()
+        self.on_setting_changed()
+        info("Timer overlay recovered.")
 
     def update_timer_visible(self, state):
         visible = bool(state)

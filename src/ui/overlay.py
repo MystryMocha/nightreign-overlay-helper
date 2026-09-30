@@ -217,6 +217,10 @@ class OverlayWidget(QWidget):
     def update_ui_state(self, state: OverlayUIState):
         if state.x is not None and state.y is not None:
             self.move(state.x, state.y)
+            # 保存的位置不在任何屏幕上（换过显示器/分辨率）时，挪回顶部居中
+            if QApplication.screenAt(self.geometry().center()) is None:
+                warning(f"Overlay position ({state.x}, {state.y}) is off-screen, moving to top center.")
+                state.set_to_top_center = True
         if state.set_x_to_center:
             screen = QApplication.primaryScreen()
             screen_geometry = screen.geometry()
