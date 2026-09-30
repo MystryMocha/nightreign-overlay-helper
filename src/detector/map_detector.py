@@ -27,6 +27,7 @@ from src.detector.utils import (
     grab_region,
     match_template,
     align_image,
+    match_color_to_reference,
 )
 
 
@@ -635,6 +636,14 @@ class MapDetector:
             info(f"MapDetector: Align map image time cost: {time.time() - align_t:.4f}s")
         except Exception as e:
             warning(f"MapDetector: Align map image failed: {e}")
+
+        # 校正亮度/色调：游戏内地图通常比底图暗，不校正时POI逐像素匹配容易出错（大空洞POI点少，尤其明显）
+        img = match_color_to_reference(img, map_bg, (
+            int(STD_MAP_SIZE[0] * 0.15),
+            int(STD_MAP_SIZE[1] * 0.15),
+            int(STD_MAP_SIZE[0] * 0.7),
+            int(STD_MAP_SIZE[1] * 0.7),
+        ))
 
         # 识别POI
         poi_result: dict[Position, int] = {}
