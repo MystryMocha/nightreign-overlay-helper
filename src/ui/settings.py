@@ -21,7 +21,7 @@ from src.common import (
 )
 from src.logger import info, warning, error, set_log_level, INFO, DEBUG
 from src.config import Config
-from src.ui.overlay import OverlayUIState, OverlayWidget
+from src.ui.overlay import OverlayUIState, OverlayWidget, MIN_OVERLAY_OPACITY
 from src.ui.map_overlay import MapOverlayWidget, MapOverlayUIState
 from src.ui.input import InputWorker, InputSettingWidget, InputSetting
 from src.ui.capture_region import CaptureRegionWindow
@@ -296,7 +296,8 @@ class SettingsWindow(QWidget):
         form.addRow("大小", make_row(self.size_slider, self.size_value_label, stretch=False))
 
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.opacity_slider.setRange(0, 100)
+        # 下限 20%，避免计时器完全透明后无法右键打开设置
+        self.opacity_slider.setRange(MIN_OVERLAY_OPACITY, 100)
         self.opacity_slider.setValue(int(self.overlay.windowOpacity() * 100))
         self.opacity_value_label = make_value_label()
         self.opacity_slider.valueChanged.connect(self.update_overlay_opacity)

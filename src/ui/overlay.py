@@ -15,6 +15,7 @@ from src.ui.utils import set_widget_always_on_top
 
 INITIAL_TEXT = f"{APP_FULLNAME} (右键打开菜单)"
 TOP_CENTER_MARGIN = 8
+MIN_OVERLAY_OPACITY = 20  # 百分比
 
 
 @dataclass
@@ -228,7 +229,7 @@ class OverlayWidget(QWidget):
         if state.scale is not None:
             self._apply_scale(state.scale)
         if state.opacity is not None:
-            self.setWindowOpacity(state.opacity)
+            self.setWindowOpacity(max(MIN_OVERLAY_OPACITY / 100.0, state.opacity))
         if state.day_progress is not None:
             for i in range(4):
                 progress = min(1, max(0, (state.day_progress - i)))
