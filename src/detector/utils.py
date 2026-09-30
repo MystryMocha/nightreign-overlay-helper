@@ -261,7 +261,7 @@ def match_template(
     return best_match, best_val
 
 
-def align_image(img: np.ndarray, target: np.ndarray, region: tuple[int, int, int, int]) -> np.ndarray:
+def align_image(img: np.ndarray, target: np.ndarray, region: tuple[int, int, int, int], return_matrix: bool = False):
     """
     使用 SIFT 特征点匹配对齐两张图像。
     仅使用 region 区域内的图像进行特征点检测和匹配，返回对齐后的整张图像。
@@ -272,7 +272,8 @@ def align_image(img: np.ndarray, target: np.ndarray, region: tuple[int, int, int
         region: (x, y, w, h) 指定用于匹配的区域坐标
         
     Returns:
-        np.ndarray: 对齐后的图像，大小与 target 一致
+        np.ndarray: 对齐后的图像，大小与 target 一致；
+        return_matrix 为 True 时返回 (对齐后的图像, 2x3 仿射矩阵 img->target)
     """
     x, y, w, h = region
     
@@ -321,6 +322,8 @@ def align_image(img: np.ndarray, target: np.ndarray, region: tuple[int, int, int
             borderMode=cv2.BORDER_CONSTANT, 
             borderValue=0
         )
+        if return_matrix:
+            return aligned_img, matrix
         return aligned_img
     else:
         raise ValueError("align_image: Could not compute affine transformation matrix.")

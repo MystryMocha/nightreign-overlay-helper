@@ -274,6 +274,7 @@ class MapDetector:
         # 大空洞水晶信息
         self.crystal_info = load_crystal_info()
         self.crystal_marker: tuple[np.ndarray, np.ndarray] | None = None  # 已破除水晶图标模板(灰度, 掩码)
+        self.last_align_matrix: np.ndarray | None = None  # 最近一次地图识别时 截图->标准地图 的仿射矩阵(标准地图坐标)
 
         # 初始化POI信息
         all_poi_construct_types = set()
@@ -449,6 +450,29 @@ class MapDetector:
         info(f"MapDetector: Detect destroyed crystals: {sorted(detected)}, "
              f"scores: { {k: round(v, 2) for k, v in sorted(scores.items())} }, time cost: {time.time() - t:.4f}s")
         return detected, scores
+
+    def _warp_overlay_to_capture(self, overlay_img: Image.Image) -> Image.Image:
+        """
+        悬浮窗内容按标准地图坐标绘制，而截图中的地图可能因区域框选/推算误差有少量偏移和缩放，
+        用识别时对齐得到的矩阵的逆变换把悬浮窗内容变换到截图中地图的实际位置
+        """
+        m = self.last_align_matrix
+        if m is None:
+            return overlay_img
+        scale = float(np.hypot(m[0, 0], m[0, 1]))
+        max_shift = max(abs(m[0, 2]), abs(m[1, 2])) / STD_MAP_SIZE[0]
+        # 偏差过大说明对齐本身不可靠，保持原样
+        if not (0.9 <= scale <= 1.1) or max_shift > 0.1:
+            return overlay_img
+        w, h = overlay_img.size
+        k = w / STD_MAP_SIZE[0]
+        m = m.astype(np.float64).copy()
+        m[:, 2] *= k
+        inv = cv2.invertAffineTransform(m)
+        arr = np.array(overlay_img.convert("RGBA"))
+        arr = cv2.warpAffine(arr, inv, (w, h), flags=cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+        return Image.fromarray(arr, "RGBA")
 
     def _match_nightlord(self, img: np.ndarray) -> tuple[int | None, float]:
         """
@@ -629,6 +653,7 @@ class MapDetector:
 
         # 识别夜王
         nightlord, _ = self._match_nightlord(img)
+        self.last_align_matrix = None
 
         # 校准偏移
         map_bg = open_cv2_image(f"maps_poi_match/{MAG_BG_FOR_POI_MATCH_INDEX_MAP[earth_shifting]}.jpg")
@@ -641,8 +666,11 @@ class MapDetector:
                 int(STD_MAP_SIZE[0] * 0.6),
                 int(STD_MAP_SIZE[1] * 0.6),
             )
-            img = align_image(img, map_bg, ALIGN_REGION)
-            info(f"MapDetector: Align map image time cost: {time.time() - align_t:.4f}s")
+            img, align_matrix = align_image(img, map_bg, ALIGN_REGION, return_matrix=True)
+            self.last_align_matrix = align_matrix
+            scale = float(np.hypot(align_matrix[0, 0], align_matrix[0, 1]))
+            info(f"MapDetector: Align map image scale {scale:.4f} shift ({align_matrix[0, 2]:.1f}, {align_matrix[1, 2]:.1f}), "
+                 f"time cost: {time.time() - align_t:.4f}s")
         except Exception as e:
             warning(f"MapDetector: Align map image failed: {e}")
 
@@ -1029,6 +1057,7 @@ class MapDetector:
                 try:
                     info(f"MapDetector: Start to draw overlay image for pattern {result.pattern.id}")
                     overlay_img = self._draw_overlay_image(result, draw_size, i)
+                    overlay_img = self._warp_overlay_to_capture(overlay_img)
                     ret.overlay_images.append(overlay_img)
                     ret.patterns.append(result.pattern)
                     gc.collect()
