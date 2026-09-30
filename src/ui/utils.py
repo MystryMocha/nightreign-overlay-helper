@@ -52,8 +52,17 @@ def get_qt_screen_by_region(region: tuple[int]) -> QWidget:
     raise ValueError(f"Region {region} is out of all screen bounds")
 
 
+_warned_out_of_screen_regions: set[tuple] = set()
+
 def region_to_qt_region(region: tuple[int]):
-    screen = get_qt_screen_by_region(region)
+    try:
+        screen = get_qt_screen_by_region(region)
+    except ValueError:
+        # 区域不在任何屏幕内（例如截图坐标与屏幕坐标不一致），按主屏幕换算，避免整个界面更新中断
+        if tuple(region) not in _warned_out_of_screen_regions:
+            _warned_out_of_screen_regions.add(tuple(region))
+            warning(f"Region {region} is out of all screen bounds, fallback to primary screen.")
+        screen = QApplication.instance().primaryScreen()
     x, y, w, h = region
     sx = screen.geometry().x()
     sy = screen.geometry().y()
