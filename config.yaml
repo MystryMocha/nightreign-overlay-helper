@@ -58,7 +58,7 @@ min_map_pattern_match_topk: 1                # 地图识别返回的最佳结果
 map_pattern_retry_error_threshold: 60        # 最佳识别结果误差高于此值时，下次打开地图自动重新识别
 map_pattern_max_retry: 2                     # 识别结果误差过高时的最大自动重试次数
 
-# 大空洞水晶自动识别（第二天起游戏会在地图上标出水晶）
+# 大空洞水晶布局自动识别（实验性，默认关闭，在设置中开启）
 crystal_detect_hsv_lower: [85, 80, 110]   # 水晶标记颜色HSV下限(OpenCV, H:0-179)
 crystal_detect_hsv_upper: [135, 255, 255] # 水晶标记颜色HSV上限
 crystal_detect_radius: 10                 # 水晶点位统计半径(750x750标准地图坐标)

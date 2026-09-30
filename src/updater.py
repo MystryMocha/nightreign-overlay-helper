@@ -111,6 +111,7 @@ class Updater(QObject):
         self.crystal_detect_start_time: float = 0.0
         self.detected_crystals: set[int] = set()        # 本局累计识别到的水晶
         self.crystal_layout_locked: bool = False        # 已唯一确定水晶布局
+        self.crystal_auto_detect_enabled: bool = False  # 是否启用水晶布局自动识别（实验性，默认关闭）
 
         self.hp_overlay = hp_overlay
         self.hp_overlay_ui_state_signal.connect(self.hp_overlay.update_ui_state)
@@ -307,7 +308,8 @@ class Updater(QObject):
         避免截图方式包含悬浮窗时把程序自己绘制的水晶图标识别进去
         """
         if self.crystal_detect_state == DoMatchMapPatternFlag.FALSE:
-            if not map_just_opened or self.current_earth_shifting != 4 or self.crystal_layout_locked \
+            if not self.crystal_auto_detect_enabled \
+                    or not map_just_opened or self.current_earth_shifting != 4 or self.crystal_layout_locked \
                     or self.do_match_map_pattern_flag != DoMatchMapPatternFlag.FALSE:
                 return
             self.crystal_detect_state = DoMatchMapPatternFlag.TRUE

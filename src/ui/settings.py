@@ -154,7 +154,7 @@ ADVANCED_PARAMS = [
     ("map_pattern_retry_error_threshold", "地图重新识别阈值", 10, 300, 5, "",
      "最佳识别结果的误差高于此值时，下次打开地图会自动重新识别\n正确结果的误差通常在 0~30，错误结果通常在 100 以上"),
     ("crystal_detect_delay", "水晶识别等待", 0.0, 3.0, 0.1, " 秒",
-     "打开地图后等待多久再识别水晶，期间地图悬浮窗保持隐藏\n打开地图有动画，太短可能识别不准"),
+     "开启水晶布局自动识别时，打开地图后等待多久再识别水晶，期间地图悬浮窗保持隐藏\n打开地图有动画，太短可能识别不准"),
     ("art_detect_delay_seconds", "绝招检测延迟", 0.0, 3.0, 0.1, " 秒", "按下绝招按键后等待多久再检测绝招图标"),
 ]
 
@@ -467,6 +467,16 @@ class SettingsWindow(QWidget):
             "如果识别地图时程序闪退，或者内存占用过大，可以尝试减小此数值"
         ), stretch=False))
 
+        self.crystal_auto_detect_checkbox = QCheckBox("大空洞水晶布局自动识别（实验性）")
+        self.crystal_auto_detect_checkbox.setChecked(False)
+        self.crystal_auto_detect_checkbox.stateChanged.connect(self.update_crystal_auto_detect)
+        form.addRow(make_row(self.crystal_auto_detect_checkbox, make_help_label(
+            "开启后每次打开地图时尝试从地图画面识别水晶并自动切换水晶布局，\n"
+            "识别期间地图悬浮窗会短暂隐藏（看起来会闪一下）。\n"
+            "目前容易把地图上的蓝色火焰、瀑布等误认成水晶，导致布局判断错误，默认关闭。\n"
+            "关闭时悬浮窗显示所有水晶点位，可用「下一个/上一个水晶布局」快捷键手动切换。"
+        )))
+
         # 地图区域
         self.map_region_group = QGroupBox("地图区域")
         region_form = make_form(self.map_region_group)
@@ -495,10 +505,8 @@ class SettingsWindow(QWidget):
             hotkey_form, "上一个识别结果", self.map_overlay.last_overlay_image)
         self.crystal_layout_next_input_setting_widget = self.add_hotkey_row(
             hotkey_form, "下一个水晶布局", self.map_overlay.next_crystal_layout,
-            "大空洞中第二天起游戏会在地图上标出水晶，\n"
-            "每次打开地图时会自动识别这些标记并切换到对应的水晶布局，\n"
-            "无法唯一确定时显示所有候选布局的合并点位。\n"
-            "使用快捷键手动切换后，本局不再自动切换。")
+            "在大空洞中切换显示的水晶布局（第0个为所有水晶点位）。\n"
+            "开启水晶布局自动识别时，使用快捷键手动切换后本局不再自动切换。")
         self.crystal_layout_last_input_setting_widget = self.add_hotkey_row(
             hotkey_form, "上一个水晶布局", self.map_overlay.last_crystal_layout)
 
@@ -801,6 +809,7 @@ class SettingsWindow(QWidget):
             load_checkbox_state(self.debug_log_checkbox, data.get("debug_log_enabled", False))
             # HDR图像处理
             load_checkbox_state(self.hdr_processing_checkbox, data.get("hdr_processing_enabled", False))
+            load_checkbox_state(self.crystal_auto_detect_checkbox, data.get("crystal_auto_detect_enabled", False))
 
             info("Settings loaded successfully")
         except Exception as e:
@@ -866,6 +875,7 @@ class SettingsWindow(QWidget):
                 # 其他
                 "debug_log_enabled": self.debug_log_checkbox.isChecked(),
                 "hdr_processing_enabled": self.hdr_processing_checkbox.isChecked(),
+                "crystal_auto_detect_enabled": self.crystal_auto_detect_checkbox.isChecked(),
             }
             save_yaml(SETTINGS_SAVE_PATH, data)
             info(f"Saved settings to {SETTINGS_SAVE_PATH}")
@@ -1680,6 +1690,20 @@ class SettingsWindow(QWidget):
         except Exception as e:
             error(f"Failed to reset settings: {e}")
             error_box(f"恢复默认设置失败：{e}", self)
+
+    def update_crystal_auto_detect(self, state):
+        enabled = self.crystal_auto_detect_checkbox.isChecked()
+        self.updater.crystal_auto_detect_enabled = enabled
+        if not enabled:
+            self.updater.reset_crystal_detection()
+            # 清除之前的自动识别结果，恢复显示所有水晶点位
+            if self.map_overlay.crystal_auto_candidates or self.map_overlay.crystal_auto_detected:
+                self.map_overlay.crystal_auto_candidates = []
+                self.map_overlay.crystal_auto_detected = set()
+                if self.map_overlay.crystal_layout_idx is not None and not self.map_overlay.crystal_manual:
+                    self.map_overlay.crystal_layout_idx = 0
+                self.map_overlay.update_crystal_layout()
+        info(f"Crystal auto detect enabled: {enabled}")
 
     def update_hdr_processing(self, state):
         enabled = self.hdr_processing_checkbox.isChecked()
