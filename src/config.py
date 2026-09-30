@@ -2,12 +2,28 @@ import yaml
 import os
 from dataclasses import dataclass
 
-from .common import load_yaml
+from .common import load_yaml, save_yaml, get_appdata_path
 
 CONFIG_PATH = "config.yaml"
+# 用户在设置界面修改的参数保存在这里，覆盖 config.yaml 中的同名项（程序更新时不会被覆盖）
+CONFIG_OVERRIDE_FILENAME = "config_override.yaml"
 
 _config: dict = {}
 _config_mtime = None
+_override_path: str | None = None
+
+
+def get_config_override_path() -> str:
+    global _override_path
+    if _override_path is None:
+        _override_path = get_appdata_path(CONFIG_OVERRIDE_FILENAME)
+    return _override_path
+
+def _get_mtime(path: str) -> float | None:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
 
 @dataclass
 class Config:
@@ -94,8 +110,42 @@ class Config:
     @staticmethod
     def get() -> 'Config':
         global _config, _config_mtime
-        mtime = os.path.getmtime(CONFIG_PATH)
+        override_path = get_config_override_path()
+        mtime = (os.path.getmtime(CONFIG_PATH), _get_mtime(override_path))
         if mtime != _config_mtime:
-            _config = load_yaml(CONFIG_PATH)
+            base = load_yaml(CONFIG_PATH)
+            override = Config.load_override() if mtime[1] is not None else {}
+            base.update({k: v for k, v in override.items() if k in base})
+            _config = base
             _config_mtime = mtime
         return Config(**_config)
+
+    @staticmethod
+    def get_default(key: str):
+        """config.yaml 中的原始值（不含用户覆盖）"""
+        return load_yaml(CONFIG_PATH).get(key)
+
+    @staticmethod
+    def load_override() -> dict:
+        path = get_config_override_path()
+        if not os.path.exists(path):
+            return {}
+        data = load_yaml(path)
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def set_override(key: str, value):
+        """设置一个覆盖值，与 config.yaml 相同时移除覆盖"""
+        override = Config.load_override()
+        if value == Config.get_default(key):
+            override.pop(key, None)
+        else:
+            override[key] = value
+        save_yaml(get_config_override_path(), override)
+
+    @staticmethod
+    def clear_override(keys: list[str] | None = None):
+        override = Config.load_override()
+        for k in (keys if keys is not None else list(override.keys())):
+            override.pop(k, None)
+        save_yaml(get_config_override_path(), override)

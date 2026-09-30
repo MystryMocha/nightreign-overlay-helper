@@ -92,11 +92,22 @@ if __name__ == "__main__":
     timer_visible_action.toggled.connect(settings_window.timer_visible_checkbox.setChecked)
     settings_window.timer_visible_checkbox.toggled.connect(timer_visible_action.setChecked)
     menu.addAction(timer_visible_action)
+    map_detect_action = QAction("启用地图识别")
+    map_detect_action.setCheckable(True)
+    map_detect_action.setChecked(settings_window.map_detect_enable_checkbox.isChecked())
+    map_detect_action.toggled.connect(settings_window.map_detect_enable_checkbox.setChecked)
+    settings_window.map_detect_enable_checkbox.toggled.connect(map_detect_action.setChecked)
+    menu.addAction(map_detect_action)
+    menu.addSeparator()
     quit_action = QAction("退出")
     quit_action.triggered.connect(app.quit)
     menu.addAction(quit_action)
-    menu.addSeparator()
     tray_icon.setContextMenu(menu)
+    # 左键单击托盘图标直接打开设置
+    def on_tray_activated(reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            show_settings()
+    tray_icon.activated.connect(on_tray_activated)
     tray_icon.show()
     
     def show_menu_at_cursor_pos():
