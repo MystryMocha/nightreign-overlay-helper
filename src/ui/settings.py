@@ -204,6 +204,20 @@ class SettingsWindow(QWidget):
         self.appearance_group = QGroupBox("计时器外观")
         self.appearance_layout = QVBoxLayout(self.appearance_group)
 
+        timer_visible_layout = QHBoxLayout()
+        self.timer_visible_checkbox = QCheckBox("显示计时器")
+        self.timer_visible_checkbox.setChecked(True)
+        self.timer_visible_checkbox.stateChanged.connect(self.update_timer_visible)
+        timer_visible_layout.addWidget(self.timer_visible_checkbox)
+        self.appearance_layout.addLayout(timer_visible_layout)
+
+        toggle_timer_input_layout = QHBoxLayout()
+        toggle_timer_input_layout.addWidget(QLabel("显示/隐藏计时器快捷键"))
+        self.toggle_timer_input_setting_widget = InputSettingWidget(self.input)
+        self.toggle_timer_input_setting_widget.input_triggered.connect(self.toggle_timer_visible)
+        toggle_timer_input_layout.addWidget(self.toggle_timer_input_setting_widget)
+        self.appearance_layout.addLayout(toggle_timer_input_layout)
+
         size_layout = QHBoxLayout()
         size_layout.addWidget(QLabel("大小"))
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
@@ -227,6 +241,10 @@ class SettingsWindow(QWidget):
         set_position_center_button.setStyleSheet(BUTTON_STYLE)
         set_position_center_button.clicked.connect(self.update_overlay_position_center)
         set_position_center_layout.addWidget(set_position_center_button)
+        set_position_top_center_button = QPushButton("移动到顶部居中")
+        set_position_top_center_button.setStyleSheet(BUTTON_STYLE)
+        set_position_top_center_button.clicked.connect(self.update_overlay_position_top_center)
+        set_position_center_layout.addWidget(set_position_top_center_button)
         self.appearance_layout.addLayout(set_position_center_layout)
 
         reset_position_layout = QHBoxLayout()
@@ -707,6 +725,8 @@ class SettingsWindow(QWidget):
                 y=data.get("y"),
             ))
             load_checkbox_state(self.hide_text_checkbox, data.get("hide_text", False))
+            load_checkbox_state(self.timer_visible_checkbox, data.get("timer_visible", True))
+            self.toggle_timer_input_setting_widget.set_setting(InputSetting.load_from_dict(data.get("toggle_timer_input_setting")))
             # 快捷键
             self.day_input_setting_widget.set_setting(InputSetting.load_from_dict(data.get("day_input_setting")))
             self.forward_day_input_setting_widget.set_setting(InputSetting.load_from_dict(data.get("forward_day_input_setting")))
@@ -774,6 +794,8 @@ class SettingsWindow(QWidget):
                 "x": self.overlay.x(),
                 "y": self.overlay.y(),
                 "hide_text": self.hide_text_checkbox.isChecked(),
+                "timer_visible": self.timer_visible_checkbox.isChecked(),
+                "toggle_timer_input_setting": asdict(self.toggle_timer_input_setting_widget.get_setting()),
                 # 快捷键
                 "day_input_setting": asdict(self.day_input_setting_widget.get_setting()),
                 "forward_day_input_setting": asdict(self.forward_day_input_setting_widget.get_setting()),
@@ -988,6 +1010,18 @@ class SettingsWindow(QWidget):
     def update_overlay_position_center(self):
         self.update_overlay_ui_state_signal.emit(OverlayUIState(set_x_to_center=True))
         info("Overlay position set to center")
+
+    def update_overlay_position_top_center(self):
+        self.update_overlay_ui_state_signal.emit(OverlayUIState(set_to_top_center=True))
+        info("Overlay position set to top center")
+
+    def update_timer_visible(self, state):
+        visible = bool(state)
+        self.update_overlay_ui_state_signal.emit(OverlayUIState(visible=visible))
+        info(f"Overlay timer visible set to {visible}")
+
+    def toggle_timer_visible(self):
+        self.timer_visible_checkbox.setChecked(not self.timer_visible_checkbox.isChecked())
 
     def update_hide_text(self, state):
         self.update_overlay_ui_state_signal.emit(OverlayUIState(hide_text=state))

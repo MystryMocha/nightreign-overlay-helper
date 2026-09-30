@@ -14,6 +14,7 @@ from src.ui.utils import set_widget_always_on_top
 
 
 INITIAL_TEXT = f"{APP_FULLNAME} (右键打开菜单)"
+TOP_CENTER_MARGIN = 8
 
 
 @dataclass
@@ -38,6 +39,7 @@ class OverlayUIState:
     art_color: str | None = None
 
     set_x_to_center: bool = False
+    set_to_top_center: bool = False
     map_pattern_match_text: str | None = None
     hide_text: bool | None = None
 
@@ -219,6 +221,10 @@ class OverlayWidget(QWidget):
             screen_geometry = screen.geometry()
             new_x = (screen_geometry.width() - self.width()) // 2
             self.move(new_x, self.y())
+        if state.set_to_top_center:
+            screen_geometry = QApplication.primaryScreen().geometry()
+            new_x = screen_geometry.x() + (screen_geometry.width() - self.width()) // 2
+            self.move(new_x, screen_geometry.y() + TOP_CENTER_MARGIN)
         if state.scale is not None:
             self._apply_scale(state.scale)
         if state.opacity is not None:
