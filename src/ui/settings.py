@@ -1361,7 +1361,7 @@ class SettingsWindow(QWidget):
         self.updater.map_region = map_region
         info(f"Updated map region: map_region={map_region}")
         if map_region is None:
-            self.map_region_label.setText("❌未设置地图区域")
+            self.map_region_label.setText("未设置地图区域：将按游戏画面自动推算\n（识别不准时再手动框选）")
         else:
             self.map_region_label.setText(f"✔️已设置地图区域: {map_region}")
 

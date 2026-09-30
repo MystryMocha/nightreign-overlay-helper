@@ -20,7 +20,7 @@ from src.detector import (
     ArtDetectParam,
 )
 from src.detector.map_info import MapPattern
-from src.ui.utils import is_window_in_foreground
+from src.ui.utils import is_window_in_foreground, get_qt_screen_by_region, process_region_to_adapt_scale
 from src.screencap import (
     get_engine,
     ScreencapMode,
@@ -97,7 +97,8 @@ class Updater(QObject):
         self.map_overlay = map_overlay
         self.update_map_overlay_ui_state_signal.connect(self.map_overlay.update_ui_state)
         self.map_detect_enabled: bool = True
-        self.map_region: tuple[int] = None
+        self.manual_map_region: tuple[int] = None
+        self.auto_map_region: tuple[int] = None
         self.current_is_full_map: bool = False
         self.do_match_map_pattern_flag: DoMatchMapPatternFlag = DoMatchMapPatternFlag.TRUE
         self.map_overlay_visible: bool = False
@@ -408,10 +409,41 @@ class Updater(QObject):
         else:
             self.show_map_overlay()
 
+    @property
+    def map_region(self) -> tuple[int] | None:
+        # 优先使用手动框选的地图区域，未设置时根据游戏画面尺寸推算
+        return self.manual_map_region or self.auto_map_region
+
+    @map_region.setter
+    def map_region(self, region: tuple[int] | None):
+        self.manual_map_region = region
+
+    def update_auto_map_region(self):
+        try:
+            w, h = get_engine().grab_fullscreen().size
+        except ScreencapRuntimeError:
+            return
+        # 游戏界面保持16:9并居中显示
+        ui_h = min(h, w * 9 / 16)
+        ui_w = ui_h * 16 / 9
+        ox, oy = (w - ui_w) / 2, (h - ui_h) / 2
+        rx, ry, rs = Config.get().default_map_region_ratio
+        size = int(ui_h * rs)
+        region = [int(ox + ui_w * rx), int(oy + ui_h * ry), size, size]
+        try:
+            region = process_region_to_adapt_scale(region, get_qt_screen_by_region(region).devicePixelRatio())
+        except Exception:
+            pass
+        if region != self.auto_map_region:
+            info(f"Map region not set, use auto map region {region} for frame size {w}x{h}.")
+            self.auto_map_region = region
+
     def detect_and_update_map(self):
         if not self.map_detect_enabled:
             self.hide_map_overlay()
             return
+        if self.manual_map_region is None:
+            self.update_auto_map_region()
    
         param = DetectParam(
             map_detect_param=MapDetectParam(
