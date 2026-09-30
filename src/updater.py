@@ -628,6 +628,7 @@ class Updater(QObject):
             info("Updater started.")
 
             last_detect_time = 0
+            last_init_error: str | None = None
             while self._running:
                 start_time = self.get_time()
 
@@ -640,8 +641,12 @@ class Updater(QObject):
                     try:
                         engine.initialize(self.screencap_mode)
                         self._applied_screencap_mode = self.screencap_mode
+                        last_init_error = None
                     except ScreencapInitError as e:
-                        warning(f"ScreencapEngine init failed: {e}. Skipping this cycle.")
+                        # 游戏未启动时会持续失败，相同错误只提示一次，避免刷屏
+                        if str(e) != last_init_error:
+                            warning(f"ScreencapEngine init failed: {e}. Will keep retrying until the game window is available.")
+                            last_init_error = str(e)
                         time.sleep(Config.get().update_interval)
                         continue
 
