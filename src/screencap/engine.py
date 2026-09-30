@@ -67,9 +67,11 @@ class ScreencapEngine:
                 methods = Manager.METHOD_BACKGROUND
             else:
                 # AUTO：排除 DXGI 桌面复制方式（全桌面 / 单窗口），
-                # 这两种方式在独占全屏/HDR下抓不到游戏画面，会导致地图识别失效
+                # 这两种方式在独占全屏/HDR下抓不到游戏画面，会导致地图识别失效；
+                # 也排除 GDI：测速时它最快而常被选中，但对 DirectX 游戏窗口只能截到白图或过期画面
                 methods = Manager.METHOD_ALL & ~(
                     Manager.METHOD_DXGI_DESKTOP_DUP | Manager.METHOD_DXGI_DESKTOP_DUP_WINDOW
+                    | Manager.METHOD_GDI
                 )
 
             self._mgr = Manager(hwnd=hwnd, methods=methods)

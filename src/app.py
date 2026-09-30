@@ -12,7 +12,7 @@ else:
     if _root not in sys.path:
         sys.path.insert(0, _root)
     os.chdir(_root)
-from PyQt6.QtCore import QThread, Qt, pyqtSignal
+from PyQt6.QtCore import QThread, Qt, pyqtSignal, qInstallMessageHandler, QtMsgType
 from PyQt6.QtGui import QIcon, QAction, QCursor
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu
@@ -26,7 +26,7 @@ from src.ui.settings import SettingsWindow
 from src.ui.admin_prompt import show_admin_prompt
 from src.updater import Updater
 from src.common import APP_FULLNAME, APP_VERSION, ICON_PATH
-from src.logger import info, warning, error
+from src.logger import info, warning, error, LOG_DIR
 from src.screencap import get_engine
 
 
@@ -61,8 +61,37 @@ def log_uncaught_exception(exc_type, exc_value, exc_tb):
     error("Uncaught exception:\n" + "".join(traceback.format_exception(exc_type, exc_value, exc_tb)), print_trace=False)
 
 
+def enable_crash_log():
+    """
+    原生层崩溃（访问冲突、Qt fatal 等）时 Python 异常处理不会被调用，进程直接消失。
+    用 faulthandler 把崩溃时各线程的 Python 调用栈写入 logs/crash.log，并记录 Qt 自身的警告/错误信息。
+    """
+    import faulthandler
+    from datetime import datetime
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        crash_file = open(os.path.join(LOG_DIR, "crash.log"), "a", encoding="utf-8")
+        crash_file.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} app v{APP_VERSION} started =====\n")
+        crash_file.flush()
+        faulthandler.enable(file=crash_file, all_threads=True)
+        globals()["_crash_file"] = crash_file   # 保持文件打开
+    except Exception as e:
+        warning(f"Failed to enable crash log: {e}")
+
+    seen_qt_warnings: set[str] = set()
+    def qt_message_handler(mode, context, message):
+        if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+            error(f"Qt: {message}", print_trace=False)
+        elif mode == QtMsgType.QtWarningMsg and message not in seen_qt_warnings:
+            # 同一条警告只记录一次，避免每帧重复刷屏
+            seen_qt_warnings.add(message)
+            warning(f"Qt: {message}")
+    qInstallMessageHandler(qt_message_handler)
+
+
 if __name__ == "__main__":
     sys.excepthook = log_uncaught_exception
+    enable_crash_log()
     info("=" * 40)
     info(f"Starting app v{APP_VERSION}...")
 
