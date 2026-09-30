@@ -31,7 +31,7 @@ class MapOverlayUIState:
     visible: bool | None = None
     overlay_images: list[Image.Image] | None = None
     display_crystal_layout: bool | None = None
-    crystal_detection: tuple[list[int], set[int]] | None = None  # (候选布局, 识别到的水晶)
+    crystal_detection: tuple[list[int], set[int]] | None = None  # (候选布局, 识别到的已破除水晶)
     capture_suspended: bool | None = None   # 截图识别期间临时隐藏，避免悬浮窗被截入画面
     clear_image: bool = False
     map_pattern_matching: bool | None = None
@@ -71,7 +71,7 @@ class MapOverlayWidget(QWidget):
         self.crystal_layout_idx: int | None = None
         self.crystal_manual: bool = False               # 是否手动切换过水晶布局
         self.crystal_auto_candidates: list[int] = []    # 自动识别的候选布局
-        self.crystal_auto_detected: set[int] = set()    # 自动识别到的水晶
+        self.crystal_auto_detected: set[int] = set()    # 自动识别到的已破除水晶
         self.init_crystal_layout_imgs()
 
         self.crystal_layout_image_box = QLabel(self)
@@ -185,7 +185,7 @@ class MapOverlayWidget(QWidget):
         """
         绘制水晶布局图片
         layout_indices: 布局序号列表，[0]为所有水晶，多个序号时绘制所有候选布局的并集
-        detected: 在地图上识别到的水晶，会额外绘制高亮圈
+        detected: 在地图上识别到的已破除水晶，会额外绘制高亮圈
         """
         MAP_SIZE = (750, 750)
         ICON_SIZE = (MAP_SIZE[0] // 25, MAP_SIZE[1] // 25)
@@ -238,7 +238,7 @@ class MapOverlayWidget(QWidget):
         if later:
             legends.append((icon_later, "额外水晶点位"))
         if detected:
-            legends.append((None, "已在地图上识别到"))
+            legends.append((None, "已破除（自动识别）"))
         sy -= max(0, len(legends) - 3) * ICON_SIZE[1]
         if len(legends) < 3:
             sy += ICON_SIZE[1] * (3 - len(legends))
@@ -368,7 +368,7 @@ class MapOverlayWidget(QWidget):
             if len(candidates) == 1:
                 crystal_layout_text = f"水晶布局: {candidates[0]}/{total} (自动识别)"
             elif len(candidates) > 1:
-                crystal_layout_text = f"水晶布局: 候选 {'/'.join(map(str, candidates))} (已识别{len(self.crystal_auto_detected)}个水晶)"
+                crystal_layout_text = f"水晶布局: 候选 {'/'.join(map(str, candidates))} (已破除{len(self.crystal_auto_detected)}个水晶)"
             elif self.crystal_layout_idx == 0:
                 crystal_layout_text = f"水晶布局: 所有/{total}"
             else:

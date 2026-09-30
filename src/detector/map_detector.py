@@ -273,6 +273,7 @@ class MapDetector:
 
         # 大空洞水晶信息
         self.crystal_info = load_crystal_info()
+        self.crystal_marker: tuple[np.ndarray, np.ndarray] | None = None  # 已破除水晶图标模板(灰度, 掩码)
 
         # 初始化POI信息
         all_poi_construct_types = set()
@@ -387,8 +388,8 @@ class MapDetector:
     
     def _detect_crystals(self, img: np.ndarray) -> tuple[set[int], dict[int, float]]:
         """
-        识别大空洞地图上被标记的水晶（第二天起游戏会在地图上标出水晶位置）
-        在每个已知水晶点位附近统计水晶标记颜色像素占比，并减去底图同位置的占比
+        识别大空洞地图上已被破除的水晶：游戏会在被破除的水晶位置显示灰色水晶图标
+        对齐底图后，在每个已知水晶点位附近用带掩码的模板匹配查找该图标
         """
         config = Config.get()
         t = time.time()
@@ -404,31 +405,32 @@ class MapDetector:
         except Exception as e:
             warning(f"MapDetector: Align map image for crystal detection failed: {e}")
 
-        lower = np.array(config.crystal_detect_hsv_lower, dtype=np.uint8)
-        upper = np.array(config.crystal_detect_hsv_upper, dtype=np.uint8)
-        img_mask = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_RGB2HSV), lower, upper) > 0
-        bg_mask = cv2.inRange(cv2.cvtColor(map_bg, cv2.COLOR_RGB2HSV), lower, upper) > 0
+        if self.crystal_marker is None:
+            marker = np.array(open_pil_image("icons/crystal/destroyed_marker.png"))
+            self.crystal_marker = (
+                cv2.cvtColor(marker[..., :3], cv2.COLOR_RGB2GRAY),
+                marker[..., 3].copy(),
+            )
+        tmpl, tmpl_mask = self.crystal_marker
+        th, tw = tmpl.shape
+        # 模板左上角相对水晶点位的偏移（图标在点位的正下方偏一点）
+        ox, oy = -tw // 2, -10
 
-        r = config.crystal_detect_radius
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         max_offset = config.crystal_detect_max_offset
-        ys, xs = np.mgrid[-r:r+1, -r:r+1]
-        disk = (xs ** 2 + ys ** 2) <= r ** 2
         w, h = STD_MAP_SIZE
-
-        def ratio(mask: np.ndarray, x: int, y: int) -> float:
-            if x - r < 0 or y - r < 0 or x + r + 1 > w or y + r + 1 > h:
-                return 0.0
-            return float(mask[y-r:y+r+1, x-r:x+r+1][disk].mean())
 
         scores: dict[int, float] = {}
         for idx, (xr, yr) in self.crystal_info.crystals.items():
-            cx, cy = int(xr * w), int(yr * h)
-            bg_ratio = ratio(bg_mask, cx, cy)
-            best = 0.0
-            for dx in range(-max_offset, max_offset + 1, 2):
-                for dy in range(-max_offset, max_offset + 1, 2):
-                    best = max(best, ratio(img_mask, cx + dx, cy + dy))
-            scores[idx] = best - bg_ratio
+            x0 = int(xr * w) + ox - max_offset
+            y0 = int(yr * h) + oy - max_offset
+            x1, y1 = x0 + tw + 2 * max_offset, y0 + th + 2 * max_offset
+            if x0 < 0 or y0 < 0 or x1 > w or y1 > h:
+                scores[idx] = 0.0
+                continue
+            res = cv2.matchTemplate(gray[y0:y1, x0:x1], tmpl, cv2.TM_CCOEFF_NORMED, mask=tmpl_mask)
+            res[~np.isfinite(res)] = 0
+            scores[idx] = float(res.max())
 
         detected = {idx for idx, s in scores.items() if s >= config.crystal_detect_threshold}
 
@@ -436,12 +438,15 @@ class MapDetector:
         vis = img.copy()
         for idx, (xr, yr) in self.crystal_info.crystals.items():
             color = (0, 255, 0) if idx in detected else (255, 0, 0)
-            cv2.circle(vis, (int(xr * w), int(yr * h)), r + max_offset, color, 2)
-            cv2.putText(vis, f"{idx}:{scores[idx]:.2f}", (int(xr * w) + r, int(yr * h)), 
+            cx, cy = int(xr * w), int(yr * h)
+            cv2.rectangle(vis, (cx + ox - max_offset, cy + oy - max_offset),
+                          (cx + ox + tw + max_offset, cy + oy + th + max_offset), color, 1)
+            cv2.putText(vis, f"{idx}:{scores[idx]:.2f}", (cx + ox + tw + max_offset, cy),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
         cv2.imwrite(get_appdata_path("map_crystal_result.jpg"), cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
 
-        info(f"MapDetector: Detect crystals: {sorted(detected)}, time cost: {time.time() - t:.4f}s")
+        info(f"MapDetector: Detect destroyed crystals: {sorted(detected)}, "
+             f"scores: { {k: round(v, 2) for k, v in sorted(scores.items())} }, time cost: {time.time() - t:.4f}s")
         return detected, scores
 
     def _match_nightlord(self, img: np.ndarray) -> tuple[int | None, float]:

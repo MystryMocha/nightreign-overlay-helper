@@ -154,7 +154,7 @@ ADVANCED_PARAMS = [
     ("map_pattern_retry_error_threshold", "地图重新识别阈值", 10, 300, 5, "",
      "最佳识别结果的误差高于此值时，下次打开地图会自动重新识别\n正确结果的误差通常在 0~30，错误结果通常在 100 以上"),
     ("crystal_detect_delay", "水晶识别等待", 0.0, 3.0, 0.1, " 秒",
-     "开启水晶布局自动识别时，打开地图后等待多久再识别水晶，期间地图悬浮窗保持隐藏\n打开地图有动画，太短可能识别不准"),
+     "打开地图后等待多久再识别已破除的水晶\n打开地图有动画，太短可能识别不准"),
     ("art_detect_delay_seconds", "绝招检测延迟", 0.0, 3.0, 0.1, " 秒", "按下绝招按键后等待多久再检测绝招图标"),
 ]
 
@@ -467,13 +467,13 @@ class SettingsWindow(QWidget):
             "如果识别地图时程序闪退，或者内存占用过大，可以尝试减小此数值"
         ), stretch=False))
 
-        self.crystal_auto_detect_checkbox = QCheckBox("大空洞水晶布局自动识别（实验性）")
-        self.crystal_auto_detect_checkbox.setChecked(False)
+        self.crystal_auto_detect_checkbox = QCheckBox("大空洞水晶布局自动识别")
+        self.crystal_auto_detect_checkbox.setChecked(True)
         self.crystal_auto_detect_checkbox.stateChanged.connect(self.update_crystal_auto_detect)
         form.addRow(make_row(self.crystal_auto_detect_checkbox, make_help_label(
-            "开启后每次打开地图时尝试从地图画面识别水晶并自动切换水晶布局，\n"
-            "识别期间地图悬浮窗会短暂隐藏（看起来会闪一下）。\n"
-            "目前容易把地图上的蓝色火焰、瀑布等误认成水晶，导致布局判断错误，默认关闭。\n"
+            "破除水晶后，游戏会在地图上该位置显示灰色水晶图标。\n"
+            "开启后每次打开地图时识别这些图标，并切换到包含所有已破除水晶的布局，\n"
+            "无法唯一确定时显示所有候选布局的合并点位。\n"
             "关闭时悬浮窗显示所有水晶点位，可用「下一个/上一个水晶布局」快捷键手动切换。"
         )))
 
@@ -809,7 +809,7 @@ class SettingsWindow(QWidget):
             load_checkbox_state(self.debug_log_checkbox, data.get("debug_log_enabled", False))
             # HDR图像处理
             load_checkbox_state(self.hdr_processing_checkbox, data.get("hdr_processing_enabled", False))
-            load_checkbox_state(self.crystal_auto_detect_checkbox, data.get("crystal_auto_detect_enabled", False))
+            load_checkbox_state(self.crystal_auto_detect_checkbox, data.get("crystal_auto_detect_enabled", True))
 
             info("Settings loaded successfully")
         except Exception as e:

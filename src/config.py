@@ -82,9 +82,6 @@ class Config:
     map_pattern_retry_error_threshold: float
     map_pattern_max_retry: int
 
-    crystal_detect_hsv_lower: list[int]
-    crystal_detect_hsv_upper: list[int]
-    crystal_detect_radius: int
     crystal_detect_max_offset: int
     crystal_detect_threshold: float
     crystal_detect_delay: float

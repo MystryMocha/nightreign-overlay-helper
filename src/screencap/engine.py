@@ -28,6 +28,17 @@ class ScreencapEngine:
     def selected_method_name(self) -> str | None:
         return self._selected_method_name
 
+    @property
+    def may_capture_overlays(self) -> bool:
+        """
+        当前截图方式是否可能截到覆盖在游戏上方的其他窗口（如本程序的悬浮窗）
+        桌面复制/屏幕DC方式截取的是屏幕内容，会包含悬浮窗；FramePool/PrintWindow等窗口截图方式不会
+        """
+        name = (self._selected_method_name or "").lower()
+        if not name:
+            return True
+        return any(k in name for k in ("dxgi", "desktop", "screen"))
+
     def initialize(self, mode: ScreencapMode = ScreencapMode.AUTO) -> None:
         try:
             self._status = EngineStatus.INITIALIZING

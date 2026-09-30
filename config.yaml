@@ -58,13 +58,10 @@ min_map_pattern_match_topk: 1                # 地图识别返回的最佳结果
 map_pattern_retry_error_threshold: 60        # 最佳识别结果误差高于此值时，下次打开地图自动重新识别
 map_pattern_max_retry: 2                     # 识别结果误差过高时的最大自动重试次数
 
-# 大空洞水晶布局自动识别（实验性，默认关闭，在设置中开启）
-crystal_detect_hsv_lower: [85, 80, 110]   # 水晶标记颜色HSV下限(OpenCV, H:0-179)
-crystal_detect_hsv_upper: [135, 255, 255] # 水晶标记颜色HSV上限
-crystal_detect_radius: 10                 # 水晶点位统计半径(750x750标准地图坐标)
-crystal_detect_max_offset: 6              # 水晶点位允许偏移(750x750标准地图坐标)
-crystal_detect_threshold: 0.12            # 水晶标记颜色像素占比阈值，高于视为该点位有水晶
-crystal_detect_delay: 0.4                 # 打开地图后等待多久再识别水晶(秒)，期间悬浮窗保持隐藏
+# 大空洞水晶布局自动识别（识别地图上已被破除的水晶图标，可在设置中关闭）
+crystal_detect_max_offset: 14             # 水晶图标相对点位允许偏移(750x750标准地图坐标)
+crystal_detect_threshold: 0.52            # 已破除水晶图标模板匹配分数阈值，高于视为该水晶已破除
+crystal_detect_delay: 0.4                 # 打开地图后等待多久再识别水晶(秒)
 
 hpbar_region_aspect_ratio: 125        # 血条区域宽高比
 hpbar_detect_std_height: 15           # 血条检测标准高度

@@ -111,7 +111,7 @@ class Updater(QObject):
         self.crystal_detect_start_time: float = 0.0
         self.detected_crystals: set[int] = set()        # 本局累计识别到的水晶
         self.crystal_layout_locked: bool = False        # 已唯一确定水晶布局
-        self.crystal_auto_detect_enabled: bool = False  # 是否启用水晶布局自动识别（实验性，默认关闭）
+        self.crystal_auto_detect_enabled: bool = True   # 是否启用水晶布局自动识别
 
         self.hp_overlay = hp_overlay
         self.hp_overlay_ui_state_signal.connect(self.hp_overlay.update_ui_state)
@@ -303,9 +303,8 @@ class Updater(QObject):
 
     def detect_and_update_crystals(self, map_img, is_full_map: bool, map_just_opened: bool):
         """
-        大空洞中每次打开地图时自动识别地图上标出的水晶并匹配水晶布局
-        打开地图时悬浮窗处于隐藏状态，识别完成前保持隐藏，
-        避免截图方式包含悬浮窗时把程序自己绘制的水晶图标识别进去
+        大空洞中每次打开地图时自动识别地图上已被破除的水晶，并匹配水晶布局
+        截图方式会截到悬浮窗时，识别完成前保持悬浮窗隐藏，避免程序自己绘制的图标遮挡地图
         """
         if self.crystal_detect_state == DoMatchMapPatternFlag.FALSE:
             if not self.crystal_auto_detect_enabled \
@@ -314,7 +313,8 @@ class Updater(QObject):
                 return
             self.crystal_detect_state = DoMatchMapPatternFlag.TRUE
             self.crystal_detect_start_time = time.time()
-            self.update_map_overlay_ui_state_signal.emit(MapOverlayUIState(capture_suspended=True))
+            if get_engine().may_capture_overlays:
+                self.update_map_overlay_ui_state_signal.emit(MapOverlayUIState(capture_suspended=True))
             return
 
         if not is_full_map:
@@ -323,7 +323,7 @@ class Updater(QObject):
         if time.time() - self.crystal_detect_start_time < Config.get().crystal_detect_delay:
             return
 
-        # 等待悬浮窗确实隐藏且地图完全展开后再识别
+        # 等待地图完全展开（以及悬浮窗确实隐藏）后再识别
         self.reset_crystal_detect_state()
         result = self.detector.detect(DetectParam(
             map_detect_param=MapDetectParam(
