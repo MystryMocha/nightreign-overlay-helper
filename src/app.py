@@ -2,8 +2,12 @@ import sys
 import time
 import os
 
-# 兼容直接运行 python src\app.py：把仓库根目录加入模块搜索路径并切换工作目录
-if not getattr(sys, "frozen", False):
+# assets、config.yaml 等都用相对路径，启动时先切到程序根目录
+# （管理员提权、快捷方式启动时工作目录可能是 System32，会导致图标等资源加载失败）
+if getattr(sys, "frozen", False):
+    os.chdir(os.path.dirname(sys.executable))
+else:
+    # 兼容直接运行 python src\app.py：把仓库根目录加入模块搜索路径
     _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _root not in sys.path:
         sys.path.insert(0, _root)
@@ -89,7 +93,13 @@ if __name__ == "__main__":
     
     # 创建系统托盘图标和菜单
     tray_icon = QSystemTrayIcon()
-    tray_icon.setIcon(QIcon(ICON_PATH))
+    icon = QIcon(ICON_PATH)
+    if icon.isNull():
+        # 图标为空时 Windows 不会显示托盘图标，退回系统默认图标
+        warning(f"Failed to load tray icon: {os.path.abspath(ICON_PATH)}")
+        icon = app.style().standardIcon(app.style().StandardPixmap.SP_ComputerIcon)
+    tray_icon.setIcon(icon)
+    app.setWindowIcon(icon)
     tray_icon.setToolTip(APP_FULLNAME)
 
     menu = QMenu()
@@ -126,6 +136,7 @@ if __name__ == "__main__":
             show_settings()
     tray_icon.activated.connect(on_tray_activated)
     tray_icon.show()
+    info(f"Tray icon shown: available={QSystemTrayIcon.isSystemTrayAvailable()}, visible={tray_icon.isVisible()}, cwd={os.getcwd()}")
     
     def show_menu_at_cursor_pos():
         cursor_pos = QCursor.pos()
