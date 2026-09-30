@@ -337,26 +337,27 @@ class MapDetector:
         img = cv2.resize(img, CHECK_FULL_MAP_STD_SIZE, interpolation=CV2_RESIZE_METHOD)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         circles = []
-        for thres in config.full_map_hough_circle_thres:
-            res = cv2.HoughCircles(
-                gray, 
-                cv2.HOUGH_GRADIENT, 
-                dp=1, 
-                minDist=20,
-                param1=thres,
-                param2=30, 
-                minRadius=int(img.shape[0] * 0.4), 
-                maxRadius=int(img.shape[0] * 0.5)
-            )
-            if res is not None:
-                circles.extend(res)
+        # 边缘清晰度随画质/缩放变化，累加器阈值从严到宽依次尝试，找到圆就停止
+        for acc_thres in (30, 25):
+            for thres in config.full_map_hough_circle_thres:
+                res = cv2.HoughCircles(
+                    gray,
+                    cv2.HOUGH_GRADIENT,
+                    dp=1,
+                    minDist=20,
+                    param1=thres,
+                    param2=acc_thres,
+                    minRadius=int(img.shape[0] * 0.4),
+                    maxRadius=int(img.shape[0] * 0.5)
+                )
+                if res is not None:
+                    circles.extend(res[0])
+            if circles:
+                break
         error = float('inf')
         if circles:
-            cx, cy, cr = sorted(list(circles[0]), key=lambda x: x[2], reverse=True)[0]
-            # cv2.circle(img, (int(cx), int(cy)), int(cr), (0, 255, 0), 2)
-            # cv2.circle(img, (int(cx), int(cy)), 2, (0, 0, 255), 3)
-            # cv2.imwrite("sandbox/full_map_test.jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-            error = abs(cr - img.shape[0] * 0.425) ** 2
+            # 取半径最接近夜王徽章圆框的圆
+            error = min(abs(cr - img.shape[0] * 0.425) ** 2 for _, _, cr in circles)
         debug(f"MapDetector: Full map match error: {error:.4f}")
         return error
     
