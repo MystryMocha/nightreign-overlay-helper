@@ -671,6 +671,11 @@ class Updater(QObject):
                         self.screencap_mode != self._applied_screencap_mode:
                     info(f"Screencap mode changed to {self.screencap_mode.name}, reconnecting engine.")
                     engine.shutdown()
+                reconnect_reason = engine.check_reconnect_reason()
+                if reconnect_reason is not None:
+                    # 游戏退出/重启后旧连接失效，断开后由下面的逻辑重新绑定新的游戏窗口
+                    warning(f"Screencap connection lost ({reconnect_reason}), reconnecting engine.")
+                    engine.shutdown()
                 if engine.status != EngineStatus.CONNECTED:
                     try:
                         engine.initialize(self.screencap_mode)

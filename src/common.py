@@ -32,6 +32,7 @@ APP_FULLNAME = f"{APP_NAME_CHS}v{APP_VERSION}"
 APP_AUTHOR = "NeuraXmy"
 
 GAME_WINDOW_TITLE = "ELDEN RING NIGHTREIGN"
+GAME_PROCESS_NAME = "nightreign.exe"
 
 
 def get_asset_path(path: str) -> str:
