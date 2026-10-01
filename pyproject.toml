@@ -10,7 +10,6 @@ dependencies = [
     "pillow>=12",
     "platformdirs>=4",
     "pygame>=2",
-    "pyinstaller>=6",
     "pynput>=1",
     "pyqt6>=6",
     "pywin32>=312; sys_platform == 'win32'",
@@ -22,6 +21,13 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
 ]
+# 仅打包时需要，运行程序不依赖（start.bat 用 --no-default-groups 跳过 dev/build）
+build = [
+    "pyinstaller>=6",
+]
+
+[tool.uv]
+default-groups = ["dev", "build"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

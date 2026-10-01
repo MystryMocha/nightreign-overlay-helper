@@ -19,7 +19,7 @@ if not exist ".venv\Scripts\pythonw.exe" (
         exit /b 1
     )
     echo 正在安装依赖，首次运行需要一点时间...
-    uv sync
+    uv sync --locked --no-default-groups
     if errorlevel 1 (
         echo 依赖安装失败，请把上面的报错发给开发者。
         pause

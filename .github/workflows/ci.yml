@@ -22,7 +22,10 @@ jobs:
         uses: astral-sh/setup-uv@v10.0.1
 
       - name: Install dependency
-        run: uv sync
+        run: uv sync --locked
+
+      - name: Verify native binaries
+        run: uv run python scripts/verify_native.py
 
       - name: Lint
         run: uv run ruff check src scripts tests
