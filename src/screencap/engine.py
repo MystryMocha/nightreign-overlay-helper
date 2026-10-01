@@ -7,9 +7,14 @@ from PIL import Image
 from src.common import GAME_WINDOW_TITLE
 from src.logger import info, warning, error
 from src.screencap.errors import ScreencapInitError, ScreencapRuntimeError
-from src.screencap.hwnd_resolver import find_game_hwnd
+from src.screencap.hwnd_resolver import find_game_hwnd, is_window_alive
 from src.screencap.native_loader import get_native_dll_dir, get_native_dll_path
 from src.screencap.types import EngineStatus, ScreencapMode
+
+
+# 连续截图失败达到该次数且持续超过该时长时，认为当前连接已失效，需要重新连接
+RECONNECT_FAILURE_COUNT = 10
+RECONNECT_FAILURE_SECONDS = 5.0
 
 
 class ScreencapEngine:
@@ -19,6 +24,9 @@ class ScreencapEngine:
         self._selected_method_name: str | None = None
         self._last_frame: Image.Image | None = None
         self._last_frame_time: float = 0.0
+        self._hwnd: int | None = None
+        self._consecutive_failures: int = 0
+        self._first_failure_time: float = 0.0
 
     @property
     def status(self) -> EngineStatus:
@@ -38,6 +46,26 @@ class ScreencapEngine:
         if not name:
             return True
         return any(k in name for k in ("dxgi", "desktop", "screen"))
+
+    def check_reconnect_reason(self) -> str | None:
+        """
+        检查已连接的引擎是否需要重新连接，需要时返回原因，否则返回None
+        游戏重启后旧窗口句柄失效、新游戏是另一个窗口，若不重连会一直对旧句柄截图失败
+        """
+        if self._status != EngineStatus.CONNECTED:
+            return None
+        if self._hwnd is not None and not is_window_alive(self._hwnd):
+            return f"game window {self._hwnd} no longer exists"
+        if self._consecutive_failures >= RECONNECT_FAILURE_COUNT and \
+                time.time() - self._first_failure_time >= RECONNECT_FAILURE_SECONDS:
+            return f"{self._consecutive_failures} consecutive screen capture failures"
+        return None
+
+    def _record_failure(self) -> None:
+        self._last_frame = None
+        if self._consecutive_failures == 0:
+            self._first_failure_time = time.time()
+        self._consecutive_failures += 1
 
     def initialize(self, mode: ScreencapMode = ScreencapMode.AUTO) -> None:
         try:
@@ -75,6 +103,8 @@ class ScreencapEngine:
                 )
 
             self._mgr = Manager(hwnd=hwnd, methods=methods)
+            self._hwnd = hwnd
+            self._consecutive_failures = 0
 
             if not self._mgr.connect():
                 raise ScreencapInitError(
@@ -83,7 +113,7 @@ class ScreencapEngine:
                 )
 
             self._selected_method_name = self._mgr.selected_unit_name()
-            info(f"ScreencapEngine initialized, selected method: {self._selected_method_name}")
+            info(f"ScreencapEngine initialized, hwnd: {hwnd}, selected method: {self._selected_method_name}")
             self._status = EngineStatus.CONNECTED
 
         except ScreencapInitError:
@@ -113,7 +143,7 @@ class ScreencapEngine:
 
         info_obj = self._mgr.screencap()
         if info_obj is None:
-            self._last_frame = None
+            self._record_failure()
             raise ScreencapRuntimeError("grab_failed", "mgr.screencap() returned None.")
 
         try:
@@ -135,13 +165,14 @@ class ScreencapEngine:
             img = Image.fromarray(arr)
             self._last_frame = img
             self._last_frame_time = now
+            self._consecutive_failures = 0
             return img
 
         except ScreencapRuntimeError:
-            self._last_frame = None
+            self._record_failure()
             raise
         except Exception as e:
-            self._last_frame = None
+            self._record_failure()
             raise ScreencapRuntimeError("grab_failed", str(e)) from e
 
     def shutdown(self) -> None:
@@ -156,5 +187,7 @@ class ScreencapEngine:
                 pass
             self._mgr = None
         self._last_frame = None
+        self._hwnd = None
+        self._consecutive_failures = 0
         self._status = EngineStatus.SHUTDOWN
         info("ScreencapEngine shutdown.")
