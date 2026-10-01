@@ -1,22 +1,18 @@
-from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QRect
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QProgressBar, 
-    QLabel, QHBoxLayout, QSizePolicy, QStackedLayout,
+    QWidget, QVBoxLayout, QLabel, QSizePolicy,
 )
-from PyQt6.QtGui import QMouseEvent, QKeySequence, QKeyEvent
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from PyQt6.QtWidgets import QGraphicsDropShadowEffect
 from PyQt6.QtGui import QColor, QPixmap, QImage
 from PIL import Image, ImageDraw
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 import time
-import glob
 
-from src.common import get_readable_timedelta, get_data_path, load_yaml
-from src.config import Config
-from src.logger import info, warning, error
-from src.ui.utils import set_widget_always_on_top, is_window_in_foreground, region_to_qt_region
+from src.common import get_readable_timedelta, get_data_path
+from src.logger import error
+from src.ui.utils import set_widget_always_on_top, region_to_qt_region
 from src.detector.utils import draw_text
 from src.detector.crystal_info import load_crystal_info
 
@@ -117,6 +113,7 @@ class MapOverlayWidget(QWidget):
         self.is_menu_opened = False
         self.is_setting_opened = False
         self.capture_suspended = False
+        self._label_font_size: int | None = None
 
         self.update_ui_state(MapOverlayUIState(
             w=10,
@@ -171,7 +168,7 @@ class MapOverlayWidget(QWidget):
         if key not in self.crystal_icon_cache:
             path = get_data_path(f"icons/crystal/{name}.png")
             if not os.path.isfile(path):
-                error(f"Failed to open image file: {path}")
+                error(f"Failed to open image file: {path}", print_trace=False)
             icon = Image.open(path).convert("RGBA")
             icon = icon.resize(size, Image.Resampling.BICUBIC)
             if alpha < 1.0:
@@ -348,17 +345,22 @@ class MapOverlayWidget(QWidget):
 
         font_size = max(8, 24 * h // 750)
 
-        # 更新vbox
-        margin = int(font_size * 0.5)
-        self.vbox.setContentsMargins(margin, margin, margin, margin)
-        self.vbox.setSpacing(margin // 2)
+        # 更新vbox和标签样式（仅在字体大小变化时，样式表重设开销较大而这里每50ms执行一次）
+        if font_size != self._label_font_size:
+            self._label_font_size = font_size
+            margin = int(font_size * 0.5)
+            self.vbox.setContentsMargins(margin, margin, margin, margin)
+            self.vbox.setSpacing(margin // 2)
+            style = f"color: white; font-size: {font_size}px;"
+            for label in (self.map_pattern_label, self.crystal_layout_label, self.match_time_label):
+                label.setStyleSheet(style)
 
         # 更新地图序号标签
         map_pattern_text = ""
         if self.overlay_images is not None and self.map_pattern_idx is not None:
             map_pattern_text = f"识别结果: {self.map_pattern_idx + 1}/{len(self.overlay_images)}"
-        self.map_pattern_label.setText(map_pattern_text)
-        self.map_pattern_label.setStyleSheet(f"color: white; font-size: {font_size}px;")
+        if self.map_pattern_label.text() != map_pattern_text:
+            self.map_pattern_label.setText(map_pattern_text)
 
         # 更新水晶布局标签
         crystal_layout_text = ""
@@ -373,8 +375,8 @@ class MapOverlayWidget(QWidget):
                 crystal_layout_text = f"水晶布局: 所有/{total}"
             else:
                 crystal_layout_text = f"水晶布局: {self.crystal_layout_idx}/{total}"
-        self.crystal_layout_label.setText(crystal_layout_text)
-        self.crystal_layout_label.setStyleSheet(f"color: white; font-size: {font_size}px;")
+        if self.crystal_layout_label.text() != crystal_layout_text:
+            self.crystal_layout_label.setText(crystal_layout_text)
 
         # 更新识别时间标签
         match_time_text = ""
@@ -384,8 +386,8 @@ class MapOverlayWidget(QWidget):
         elif self.map_pattern_match_time > 0:
             elapsed = time.time() - self.map_pattern_match_time
             match_time_text = f"识别时间：{get_readable_timedelta(timedelta(seconds=elapsed))}前"
-        self.match_time_label.setText(match_time_text)
-        self.match_time_label.setStyleSheet(f"color: white; font-size: {font_size}px;")
+        if self.match_time_label.text() != match_time_text:
+            self.match_time_label.setText(match_time_text)
 
         # 更新透明度
         threshold = 0.01

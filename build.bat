@@ -34,3 +34,15 @@ copy "config.yaml" "dist\nightreign-overlay-helper\config.yaml"
 
 echo 构建完成，输出目录：dist\nightreign-overlay-helper
 pause
+
+exit /b 0
+
+:: 刷新当前命令行窗口的 PATH：刚安装的 uv 写入的是注册表中的用户 PATH，已打开的窗口看不到
+:refresh_path
+set "USER_PATH="
+set "SYSTEM_PATH="
+for /f "skip=2 tokens=2*" %%A in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "USER_PATH=%%B"
+for /f "skip=2 tokens=2*" %%A in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "SYSTEM_PATH=%%B"
+if defined SYSTEM_PATH if defined USER_PATH call set "PATH=%SYSTEM_PATH%;%USER_PATH%"
+set "PATH=%PATH%;%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin"
+goto :eof

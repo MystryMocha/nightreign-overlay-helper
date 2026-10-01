@@ -13,9 +13,22 @@ dependencies = [
     "pyinstaller>=6",
     "pynput>=1",
     "pyqt6>=6",
-    "pywin32>=312",
+    "pywin32>=312; sys_platform == 'win32'",
     "pyyaml>=6",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff.lint]
+select = ["F"]
 
 [[tool.uv.index]]
 url = "https://mirrors.cloud.tencent.com/pypi/simple/"

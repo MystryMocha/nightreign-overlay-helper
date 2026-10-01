@@ -1,4 +1,4 @@
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QEvent, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QTimer
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QLabel, QSlider, QGroupBox, QCheckBox, QPushButton,
@@ -6,8 +6,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QScrollArea, QTabWidget, QSpinBox, QDoubleSpinBox,
 )
 from PyQt6.QtGui import QPixmap, QIcon, QMouseEvent, QEnterEvent
-import yaml
-from dataclasses import dataclass, asdict
+from dataclasses import asdict
 import os
 import ctypes
 import shutil
@@ -19,7 +18,7 @@ from src.common import (
     get_appdata_path, get_asset_path, get_desktop_path,
     ICON_PATH, load_yaml, save_yaml,
 )
-from src.logger import info, warning, error, set_log_level, INFO, DEBUG
+from src.logger import info, warning, error, set_log_level, INFO, DEBUG, LOG_DIR
 from src.config import Config
 from src.ui.overlay import OverlayUIState, OverlayWidget, MIN_OVERLAY_OPACITY
 from src.ui.map_overlay import MapOverlayWidget, MapOverlayUIState
@@ -131,6 +130,14 @@ def make_row(*widgets: QWidget, stretch: bool = True) -> QWidget:
     if stretch:
         layout.addStretch()
     return row
+
+def valid_region(value) -> list[int] | None:
+    """设置文件中的区域必须是 4 个数字 (x, y, w, h)，否则视为未设置"""
+    if isinstance(value, (list, tuple)) and len(value) == 4 \
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
+        return [int(v) for v in value]
+    return None
+
 
 def set_region_label(label: QLabel, region: list | None):
     if region is None:
@@ -359,7 +366,7 @@ class SettingsWindow(QWidget):
             "截图黑屏或识别不到时可以尝试切换"
         ), stretch=False))
 
-        self.only_show_when_game_foreground_checkbox = QCheckBox("仅在游戏窗口处于前台时显示和检测")
+        self.only_show_when_game_foreground_checkbox = QCheckBox("仅在游戏窗口处于前台时显示、检测并响应快捷键")
         self.only_show_when_game_foreground_checkbox.setChecked(False)
         self.only_show_when_game_foreground_checkbox.stateChanged.connect(self.update_only_show_when_game_foreground)
         form.addRow(self.only_show_when_game_foreground_checkbox)
@@ -589,7 +596,7 @@ class SettingsWindow(QWidget):
         self.debug_log_checkbox = QCheckBox("开启调试日志")
         self.debug_log_checkbox.setChecked(False)
         self.debug_log_checkbox.stateChanged.connect(self.update_debug_log)
-        form.addRow(make_row(self.debug_log_checkbox, make_help_label("反馈问题前建议开启，日志中会记录更详细的识别信息")))
+        form.addRow(make_row(self.debug_log_checkbox, make_help_label("反馈问题前建议开启，日志中会记录更详细的识别信息，并保存地图识别的调试图片（位于日志目录，随BUG反馈打包）。\n日志中不会记录你按下的具体按键")))
 
         grid = QGridLayout()
         grid.addWidget(make_button("管理预设", self.open_preset_dialog), 0, 0)
@@ -725,24 +732,40 @@ class SettingsWindow(QWidget):
         self.update_preset_list()
 
 
-    def load_settings(self):
+    def load_settings(self) -> bool:
+        """从文件加载设置并应用到界面和检测线程，完整加载成功返回 True"""
+        loaded = False
         try:
             def load_checkbox_state(checkbox: QCheckBox, state: bool):
                 checkbox.setChecked(not state)
                 checkbox.setChecked(state)
             def load_slider_value(slider: QSlider, value: int):
-                slider.setValue(value - 1)
-                slider.setValue(value)
+                # 无论取值是否与当前相同都要触发 valueChanged，让界面和检测线程同步到这个值
+                value = max(slider.minimum(), min(slider.maximum(), int(value)))
+                if slider.value() == value:
+                    slider.valueChanged.emit(value)
+                else:
+                    slider.setValue(value)
             def load_combobox_value(combobox: QComboBox, value: str):
-                combobox.setCurrentText(None)
-                combobox.setCurrentText(value)
+                # 同上。对不可编辑的下拉框，setCurrentText 在文本相同时不会发出信号，
+                # 导致默认值（如检测频率"高"）从未同步到检测线程
+                index = combobox.findText(str(value))
+                if index < 0:
+                    warning(f"Unknown saved value {value!r} for combobox, keep current")
+                    index = combobox.currentIndex()
+                if combobox.currentIndex() == index:
+                    combobox.currentTextChanged.emit(combobox.currentText())
+                else:
+                    combobox.setCurrentIndex(index)
 
             self._loading = True
             info("------------------------")
             info("Start to load settings")
             config = Config.get()
             if os.path.exists(SETTINGS_SAVE_PATH):
-                data = load_yaml(SETTINGS_SAVE_PATH)
+                data = load_yaml(SETTINGS_SAVE_PATH, raise_on_error=True)
+                if not isinstance(data, dict):
+                    raise ValueError("settings file is not a mapping")
                 info(f"Loaded settings from {SETTINGS_SAVE_PATH}")
             else:
                 data = {}
@@ -770,10 +793,13 @@ class SettingsWindow(QWidget):
             load_checkbox_state(self.dayx_detect_enable_checkbox, data.get("dayx_detect_enabled", True))
             load_checkbox_state(self.in_rain_detect_enable_checkbox, data.get("in_rain_detect_enabled", True))
             self.capture_dayx_hpcolor_region_input_widget.set_setting(InputSetting.load_from_dict(data.get("capture_dayx_hpbar_region_input_setting")))
-            self.dayx_detect_lang = data.get("dayx_detect_lang", "chs")
+            lang = data.get("dayx_detect_lang", "chs")
+            if lang not in config.dayx_detect_langs:
+                lang = "chs" if "chs" in config.dayx_detect_langs else next(iter(config.dayx_detect_langs))
+            self.dayx_detect_lang = lang
             load_combobox_value(self.lang_combobox, config.dayx_detect_langs[self.dayx_detect_lang])
-            self.day1_detect_region = data.get("day1_detect_region", None)
-            self.hpcolor_detect_region = data.get("hp_bar_detect_region", None)
+            self.day1_detect_region = valid_region(data.get("day1_detect_region"))
+            self.hpcolor_detect_region = valid_region(data.get("hp_bar_detect_region"))
             self.update_day1_hpcolor_regions()
             self.align_to_detect_hp_color_input_widget.set_setting(InputSetting.load_from_dict(data.get("align_to_detect_hp_color_input_setting")))
             self.not_in_rain_hls = data.get("not_in_rain_hls", None)
@@ -784,7 +810,7 @@ class SettingsWindow(QWidget):
             # 地图识别
             load_checkbox_state(self.map_detect_enable_checkbox, data.get("map_detect_enabled", True))
             self.capture_map_region_input_widget.set_setting(InputSetting.load_from_dict(data.get("capture_map_region_input_setting")))
-            self.map_region = data.get("map_region", None)
+            self.map_region = valid_region(data.get("map_region"))
             self.update_map_region()
             self.set_to_detect_map_input_setting_widget.set_setting(InputSetting.load_from_dict(data.get("set_to_detect_map_input_setting")))
             self.show_map_overlay_input_setting_widget.set_setting(InputSetting.load_from_dict(data.get("show_map_overlay_input_setting")))
@@ -797,13 +823,13 @@ class SettingsWindow(QWidget):
             load_checkbox_state(self.hp_detect_enable_checkbox, data.get("hp_detect_enabled", True))
             load_checkbox_state(self.hp_detect_keep_last_valid_checkbox, data.get("hp_detect_keep_last_valid", False))
             self.capture_hpbar_region_input_widget.set_setting(InputSetting.load_from_dict(data.get("capture_hpbar_region_input_setting")))
-            self.hpbar_region = data.get("hpbar_region", None)
+            self.hpbar_region = valid_region(data.get("hpbar_region"))
             self.update_hpbar_region()
             # 绝招计时器
             load_checkbox_state(self.art_detect_enable_checkbox, data.get("art_detect_enabled", True))
             self.capture_art_region_input_widget.set_setting(InputSetting.load_from_dict(data.get("capture_art_region_input_setting")))
             self.use_art_input_setting_widget.set_setting(InputSetting.load_from_dict(data.get("use_art_input_setting")))
-            self.art_region = data.get("art_region", None)
+            self.art_region = valid_region(data.get("art_region"))
             self.update_art_region()
             # 其他
             load_checkbox_state(self.debug_log_checkbox, data.get("debug_log_enabled", False))
@@ -812,12 +838,25 @@ class SettingsWindow(QWidget):
             load_checkbox_state(self.crystal_auto_detect_checkbox, data.get("crystal_auto_detect_enabled", True))
 
             info("Settings loaded successfully")
+            loaded = True
         except Exception as e:
             error(f"Failed to load settings: {e}")
+            # 加载中途失败时后面的设置项保持默认值，之后的自动保存会把它们写回文件，所以先备份原文件
+            self.backup_unloadable_settings()
         finally:
             self._loading = False
         self.refresh_status()
         info("------------------------")
+        return loaded
+
+    def backup_unloadable_settings(self):
+        try:
+            if os.path.exists(SETTINGS_SAVE_PATH):
+                backup_path = SETTINGS_SAVE_PATH + ".load_failed.bak"
+                shutil.copyfile(SETTINGS_SAVE_PATH, backup_path)
+                warning(f"Settings could not be fully loaded, original file backed up to {backup_path}")
+        except OSError as e:
+            warning(f"Failed to back up settings file: {e}")
 
     def save_settings(self):
         try:
@@ -912,7 +951,6 @@ class SettingsWindow(QWidget):
 
     def __init__(self, overlay: OverlayWidget, map_overlay: MapOverlayWidget, updater: Updater, input: InputWorker):
         super().__init__()
-        config = Config.get()
         self.overlay = overlay
         self.map_overlay = map_overlay
         self.update_overlay_ui_state_signal.connect(overlay.update_ui_state)
@@ -974,17 +1012,22 @@ class SettingsWindow(QWidget):
         
         # overide current settings with preset
         current_path = SETTINGS_SAVE_PATH
+        backup_path = current_path + ".bak"
         self.save_settings()
-        if os.path.exists(current_path + '.bak'):
-            os.remove(current_path + '.bak')
-        os.rename(current_path, current_path + ".bak")
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+        has_backup = os.path.exists(current_path)
+        if has_backup:
+            os.rename(current_path, backup_path)
         try:
             shutil.copyfile(preset_path, current_path)
-            self.load_settings()
+            if not self.load_settings():
+                raise ValueError("预设文件内容无效或不完整")
             info(f"Loaded preset settings '{preset_name}' from {preset_path}")
             info_box(f"成功加载预设设置：{preset_name}", self.preset_dialog)
         except Exception as e:
-            os.replace(current_path + ".bak", current_path)
+            if has_backup:
+                os.replace(backup_path, current_path)
             self.load_settings()
             error(f"Failed to load preset settings '{preset_name}': {e}")
             error_box(f"加载预设设置失败：{e}\n已还原到之前的设置。", self.preset_dialog)
@@ -1306,30 +1349,30 @@ class SettingsWindow(QWidget):
         if self.updater.hdr_processing_enabled:
             # HDR模式：显示HDR配置状态
             if self.not_in_rain_hls_hdr is None:
-                self.not_in_rain_label.setText(f"HDR:默认")
-                self.not_in_rain_label.setStyleSheet(f"background-color: #fff; color: black")
+                self.not_in_rain_label.setText("HDR:默认")
+                self.not_in_rain_label.setStyleSheet("background-color: #fff; color: black")
             else:
-                self.not_in_rain_label.setText(f"HDR:已设置")
+                self.not_in_rain_label.setText("HDR:已设置")
                 self.not_in_rain_label.setStyleSheet(f"background-color: rgb{hls_to_rgb(self.not_in_rain_hls_hdr)}; color: white")
             if self.in_rain_hls_hdr is None:
-                self.in_rain_label.setText(f"HDR:默认")
-                self.in_rain_label.setStyleSheet(f"background-color: #fff; color: black")
+                self.in_rain_label.setText("HDR:默认")
+                self.in_rain_label.setStyleSheet("background-color: #fff; color: black")
             else:
-                self.in_rain_label.setText(f"HDR:已设置")
+                self.in_rain_label.setText("HDR:已设置")
                 self.in_rain_label.setStyleSheet(f"background-color: rgb{hls_to_rgb(self.in_rain_hls_hdr)}; color: white")
         else:
             # 非HDR模式：显示普通配置状态
             if self.not_in_rain_hls is None:
-                self.not_in_rain_label.setText(f"默认")
-                self.not_in_rain_label.setStyleSheet(f"background-color: #fff; color: black")
+                self.not_in_rain_label.setText("默认")
+                self.not_in_rain_label.setStyleSheet("background-color: #fff; color: black")
             else:
-                self.not_in_rain_label.setText(f"已设置")
+                self.not_in_rain_label.setText("已设置")
                 self.not_in_rain_label.setStyleSheet(f"background-color: rgb{hls_to_rgb(self.not_in_rain_hls)}; color: white")
             if self.in_rain_hls is None:
-                self.in_rain_label.setText(f"默认")
-                self.in_rain_label.setStyleSheet(f"background-color: #fff; color: black")
+                self.in_rain_label.setText("默认")
+                self.in_rain_label.setStyleSheet("background-color: #fff; color: black")
             else:
-                self.in_rain_label.setText(f"已设置")
+                self.in_rain_label.setText("已设置")
                 self.in_rain_label.setStyleSheet(f"background-color: rgb{hls_to_rgb(self.in_rain_hls)}; color: white")
 
     # =========================== Map Detect =========================== #
@@ -1411,15 +1454,18 @@ class SettingsWindow(QWidget):
                     # 保持正方形
                     x, y, w, h = item['rect']
                     self.map_region = list((x, y, min(w, h), min(w, h)))
-                self.update_map_region()
+            self.update_map_region()
             self.save_settings()
 
     def update_map_region(self):
         map_region = self.map_region
         if map_region is not None:
             old_map_region = map_region.copy()
-            screen = get_qt_screen_by_region(map_region)
-            scale = screen.devicePixelRatio()
+            try:
+                scale = get_qt_screen_by_region(map_region).devicePixelRatio()
+            except ValueError:
+                scale = QApplication.primaryScreen().devicePixelRatio()
+                warning(f"Map region {map_region} is out of all screen bounds, use primary screen scale {scale}")
             map_region = process_region_to_adapt_scale(map_region, scale)
             info(f"Map region adapted to screen scale {scale}: {old_map_region} -> {map_region}")
         if self.updater.map_region != map_region:
@@ -1441,7 +1487,10 @@ class SettingsWindow(QWidget):
         self.save_settings()
 
     def update_map_pattern_return_topk(self, text: str):
-        self.updater.map_pattern_return_topk = int(text)
+        try:
+            self.updater.map_pattern_return_topk = int(text)
+        except ValueError:
+            return
         info(f"Map pattern return topk changed to {text}")
 
     # =========================== Performance =========================== #
@@ -1500,7 +1549,7 @@ class SettingsWindow(QWidget):
             for item in region_result:
                 if item['color'] == COLOR_HPBAR_REGION:
                     self.hpbar_region = list(item['rect'])
-                self.update_hpbar_region()
+            self.update_hpbar_region()
             self.save_settings()
 
     def show_capture_hpbar_region_tutorial(self):
@@ -1576,7 +1625,7 @@ class SettingsWindow(QWidget):
             for item in region_result:
                 if item['color'] == COLOR_ART_REGION:
                     self.art_region = list(item['rect'])
-                self.update_art_region()
+            self.update_art_region()
             self.save_settings()
 
     def show_capture_art_region_tutorial(self):
@@ -1643,7 +1692,7 @@ class SettingsWindow(QWidget):
     
     def open_bug_report_window(self):
         w = BugReportWindow(
-            log_dir=get_appdata_path(""),
+            log_dir=LOG_DIR,    # 只打包日志目录；AppData 根目录里还有设置和框选区域时保存的屏幕截图
             export_dir=get_desktop_path(),
             mail_address=Config.get().bug_report_email,
             parent=self,

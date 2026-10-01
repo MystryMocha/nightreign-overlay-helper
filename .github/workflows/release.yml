@@ -14,7 +14,18 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      # 通过环境变量传入，避免把用户输入直接拼进 shell 脚本
+      INPUT_VERSION: ${{ inputs.version }}
     steps:
+      - name: Validate version input
+        shell: pwsh
+        run: |
+          if ($env:INPUT_VERSION -notmatch '^\d+(\.\d+)*(-[A-Za-z0-9.]+)?$') {
+            Write-Error "Invalid version '$env:INPUT_VERSION'. Expected e.g. 1.2.3 or 1.2.3-rc.1"
+            exit 1
+          }
+
       - name: Checkout default branch
         uses: actions/checkout@v7
         with:
@@ -39,10 +50,19 @@ jobs:
       - name: Install dependency
         run: uv sync
 
+      - name: Verify native DLL before tagging
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "native/MaaWin32Screencap.dll" -PathType Leaf)) {
+            Write-Error "native/MaaWin32Screencap.dll not found. Aborting tag creation."
+            exit 1
+          }
+          Write-Host "native/MaaWin32Screencap.dll verified. Safe to create tag."
+
       - name: Set project version (pyproject.toml)
         shell: pwsh
         run: |
-          $tag = "v${{ inputs.version }}"
+          $tag = "v$env:INPUT_VERSION"
           uv run python scripts/ci_version.py --tag "$tag" --file pyproject.toml --set-github-env
 
       - name: Commit version bump
@@ -61,24 +81,15 @@ jobs:
           git commit -m "chore: bump version to $env:PROJECT_VERSION"
           git push
 
-      - name: Verify native DLL before tagging
-        shell: pwsh
-        run: |
-          if (-not (Test-Path "native/MaaWin32Screencap.dll" -PathType Leaf)) {
-            Write-Error "native/MaaWin32Screencap.dll not found. Aborting tag creation."
-            exit 1
-          }
-          Write-Host "native/MaaWin32Screencap.dll verified. Safe to create tag."
-
       - name: Create and push tag
         shell: pwsh
         run: |
-          $tag = "v${{ inputs.version }}"
+          $tag = "v$env:INPUT_VERSION"
           git tag -a "$tag" -m "Release $tag"
           git push origin "$tag"
 
       - name: Done
         shell: pwsh
         run: |
-          Write-Host "Tag pushed: v${{ inputs.version }}"
+          Write-Host "Tag pushed: v$env:INPUT_VERSION"
           Write-Host "This will trigger .github/workflows/build.yml via tag push."

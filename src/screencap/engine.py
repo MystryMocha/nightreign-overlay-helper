@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image
 
 from src.common import GAME_WINDOW_TITLE, GAME_PROCESS_NAME
-from src.logger import info, warning, error
+from src.logger import info, warning
 from src.screencap.errors import ScreencapInitError, ScreencapRuntimeError
 from src.screencap.hwnd_resolver import (
     GameWindow,

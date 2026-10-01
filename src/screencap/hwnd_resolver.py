@@ -94,6 +94,11 @@ def _get_process_exe_name(pid: int) -> str | None:
         kernel32.CloseHandle(handle)
 
 
+def get_window_exe_name(hwnd: int) -> str | None:
+    """窗口所属进程的可执行文件名（小写），无法获取时返回None"""
+    return _get_process_exe_name(_get_window_pid(hwnd))
+
+
 def _get_client_area(hwnd: int) -> int:
     import ctypes
     from ctypes import wintypes as wt
@@ -106,7 +111,6 @@ def _get_client_area(hwnd: int) -> int:
 
 def _enum_title_candidates(title: str) -> list[_Candidate]:
     import ctypes
-    from ctypes import wintypes as wt
     user32, _ = _win32()
     title = title.lower()
     hwnds: list[int] = []

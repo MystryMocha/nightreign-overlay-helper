@@ -21,6 +21,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PIL import Image
 
+from src.logger import warning
+
 
 class BugReportWindow(QMainWindow):
     def __init__(
@@ -60,7 +62,7 @@ class BugReportWindow(QMainWindow):
         self.screenshot_list_label.setWordWrap(True)
         self.layout.addWidget(self.screenshot_list_label)
 
-        self.layout.addWidget(QLabel("程序的日志文件将自动打包在内"))
+        self.layout.addWidget(QLabel("程序的日志文件将自动打包在内（不包含屏幕截图）；\n开启调试日志后，日志目录中还会包含地图识别的调试图片"))
 
         self.submit_button = QPushButton("提交")
         self.submit_button.clicked.connect(self.submit_feedback)
@@ -134,12 +136,15 @@ class BugReportWindow(QMainWindow):
             with zipfile.ZipFile(
                 zip_filepath, "w", zipfile.ZIP_DEFLATED
             ) as zipf:
-                # 1. 添加日志目录
+                # 1. 添加日志目录（调用方应只传入日志目录，不要传入包含设置文件和屏幕截图的上级目录）
                 for root, _, files in os.walk(self.log_directory):
                     for file in files:
                         file_path = os.path.join(root, file)
                         arcname = os.path.relpath(file_path, self.log_directory)
-                        zipf.write(file_path, arcname=os.path.join("logs", arcname))
+                        try:
+                            zipf.write(file_path, arcname=os.path.join("logs", arcname))
+                        except OSError as e:
+                            warning(f"Bug report: skip unreadable file {file_path}: {e}")
 
                 # 2. 添加错误反馈文本
                 feedback_content = self.feedback_text.toPlainText()
@@ -149,8 +154,8 @@ class BugReportWindow(QMainWindow):
                 for i, filepath in enumerate(self.selected_screenshots):
                     try:
                         with Image.open(filepath) as img:
-                            # 转换为RGB以保存为JPG
-                            if img.mode in ("RGBA", "P"):
+                            # 转换为RGB以保存为JPG（JPEG不支持 RGBA/P/LA/CMYK/16位 等模式）
+                            if img.mode != "RGB":
                                 img = img.convert("RGB")
                             
                             # 在内存中保存为JPG
@@ -161,7 +166,7 @@ class BugReportWindow(QMainWindow):
                             # 写入zip文件
                             zipf.writestr(f"screenshot_{i+1}.jpg", jpg_buffer.getvalue())
                     except Exception as e:
-                        print(f"无法处理截图 {filepath}: {e}")
+                        warning(f"Bug report: failed to process screenshot {filepath}: {e}")
 
             # 提示用户发送邮件
             msg_box = QMessageBox(self)
@@ -185,7 +190,7 @@ class BugReportWindow(QMainWindow):
         """在Windows文件资源管理器中打开并选中文件"""
         if sys.platform == "win32":
             filepath = os.path.abspath(filepath)
-            subprocess.Popen(f'explorer /select,"{filepath}"')
+            subprocess.Popen(["explorer", f"/select,{filepath}"])
 
 
 if __name__ == "__main__":

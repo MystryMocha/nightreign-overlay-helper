@@ -1,13 +1,11 @@
 import cv2
 import numpy as np
 from dataclasses import dataclass
-from PIL import Image
 import time
-from PyQt6.QtGui import QPixmap
 from src.screencap import ScreencapEngine
 
 from src.config import Config
-from src.logger import info, warning, error, debug
+from src.logger import debug
 from src.detector.utils import grab_region, resize_by_height_keep_aspect_ratio
 
 

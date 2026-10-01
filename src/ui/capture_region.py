@@ -1,9 +1,9 @@
 import sys
-from PyQt6.QtWidgets import QApplication, QWidget, QPushButton, QDialog
-from PyQt6.QtGui import QPainter, QScreen, QPixmap, QColor, QPen, QBrush, QCursor
+from PyQt6.QtWidgets import QApplication, QPushButton, QDialog
+from PyQt6.QtGui import QPainter, QPixmap, QColor, QPen, QBrush, QCursor
 from PyQt6.QtCore import Qt, QRect, QPoint
 
-from src.logger import info, warning, error
+from src.logger import info
 from src.ui.input import InputWorker
 
 

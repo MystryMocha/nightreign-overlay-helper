@@ -1,11 +1,11 @@
 import pygame
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from pynput import keyboard, mouse
 from PyQt6.QtWidgets import (QWidget, QPushButton, QVBoxLayout, QDialog, 
                              QLabel, QHBoxLayout)
-from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from dataclasses import dataclass
+import re
 import time
 
 from src.logger import info, warning, error, debug
@@ -34,6 +34,17 @@ class InputWorker(QObject):
         self.pressing_keys: list[PressingInput] = []
         self.pressing_mouse_buttons: list[PressingInput] = []
         self.pressing_joystick_buttons: dict[int, list[PressingInput]] = {}
+
+        self._signals_blocked = False
+        self._scanned_joystick_count: int | None = None
+
+    def set_signals_blocked(self, blocked: bool):
+        """
+        阻止/恢复按键信号的发射（仍会记录按键状态，恢复后组合键判断不受影响）
+        线程安全：只是设置一个标志位。不能用 QObject.blockSignals —— 本对象的 run() 一直阻塞在输入线程里，
+        没有事件循环，从其他线程排队调用 blockSignals 永远不会被执行
+        """
+        self._signals_blocked = bool(blocked)
 
 
     def _get_key_identifier(self, key):
@@ -74,8 +85,10 @@ class InputWorker(QObject):
         扫描并初始化连接的手柄设备。
         """
         count = pygame.joystick.get_count()
-        if count == len(self.joysticks):
+        # 只在设备数量变化时重新扫描：某个手柄初始化失败时不会每个循环都重试并刷日志
+        if count == self._scanned_joystick_count:
             return
+        self._scanned_joystick_count = count
         self.joysticks.clear()
         for i in range(count):
             try:
@@ -91,7 +104,8 @@ class InputWorker(QObject):
         """
         处理任意按键按下事件
         """
-        debug(f"InputWorker: press type={type}, identifier={identifier}, joystick_id={joystick_id}")
+        # 注意：日志中不记录具体按键。全局键盘钩子会捕获所有应用里的输入，日志还会随BUG反馈发出
+        debug(f"InputWorker: press type={type}")
 
         if identifier is None:
             return
@@ -127,15 +141,17 @@ class InputWorker(QObject):
             identifier=identifier,
             time=now,
         ))
+        if self._signals_blocked:
+            return
         combo = tuple(pi.identifier for pi in inputs)
         signal.emit(combo)
-        debug(f"InputWorker: emit {type} combo: {combo}")
+        debug(f"InputWorker: emit {type} combo of {len(combo)} input(s)")
     
     def _release(self, type: str, identifier: str, joystick_id: int = None):
         """
         处理任意按键松开事件
         """
-        debug(f"InputWorker: release type={type}, identifier={identifier}, joystick_id={joystick_id}")
+        debug(f"InputWorker: release type={type}")
 
         if identifier is None:
             return
@@ -159,6 +175,28 @@ class InputWorker(QObject):
                 inputs.remove(pi)
                 break
 
+
+    HAT_RIGHT, HAT_LEFT, HAT_DOWN, HAT_UP = 2001, 2002, 2003, 2004
+
+    @staticmethod
+    def hat_value_to_buttons(hat_value: tuple[int, int]) -> set[int]:
+        """十字键的 (x, y) 值对应当前按下的方向按钮集合，斜向时同时包含两个方向"""
+        x, y = hat_value
+        buttons = set()
+        if x > 0: buttons.add(InputWorker.HAT_RIGHT)
+        if x < 0: buttons.add(InputWorker.HAT_LEFT)
+        if y < 0: buttons.add(InputWorker.HAT_DOWN)
+        if y > 0: buttons.add(InputWorker.HAT_UP)
+        return buttons
+
+    def _update_hat(self, joystick_id: int, hat_value: tuple[int, int]):
+        target = self.hat_value_to_buttons(hat_value)
+        # 先释放不再按下的方向，再按下新的方向
+        for button in (self.HAT_RIGHT, self.HAT_LEFT, self.HAT_DOWN, self.HAT_UP):
+            if button not in target:
+                self._release('joystick', button, joystick_id)
+        for button in sorted(target):
+            self._press('joystick', button, joystick_id)
 
     def run(self):
         # 初始化 Pygame
@@ -218,28 +256,14 @@ class InputWorker(QObject):
 
                     elif event.type == pygame.JOYHATMOTION:
                         # 将方向键当做按钮处理
-                        joystick_id, hat_index, hat_value = event.joy, event.hat, event.value
-                        HAT_BUTTON_MAP = {
-                            (1, 0): 2001,   # 右
-                            (-1, 0): 2002,  # 左
-                            (0, -1): 2003,  # 下
-                            (0, 1): 2004,   # 上
-                            (0, 0): None,   # 恢复
-                        }
-                        if hat_index == 0:  # 只处理第一个方向键帽
-                            button_index = HAT_BUTTON_MAP.get(hat_value, None)
-                            if button_index is not None:
-                                self._press('joystick', button_index, joystick_id)
-                            else:
-                                # 恢复所有方向键
-                                if joystick_id in self.pressing_joystick_buttons:
-                                    for dir_button in [2001, 2002, 2003, 2004]:
-                                        self._release('joystick', dir_button, joystick_id)
+                        if event.hat == 0:  # 只处理第一个方向键帽
+                            self._update_hat(event.joy, event.value)
 
                 clock.tick(10)
 
             except Exception as e:
                 error(f"Error in Pygame event loop: {e}")
+                time.sleep(0.5)     # 持续出错时避免空转并刷屏
 
         info("Pygame main loop finished.")
         pygame.quit()
@@ -282,7 +306,7 @@ class InputWorker(QObject):
         """
         try:
             button_identifier = str(button).split('.')[-1].upper()
-        except:
+        except Exception:
             warning(f"InputWorker: Unknown mouse button {button} in _on_mouse_click")
             return
 
@@ -321,7 +345,7 @@ def format_combo(combo_type: str, combo_tuple: tuple[str, ...]) -> str:
     if combo_type == "keyboard":
         keys = []
         for k in combo_tuple:
-            cleaned_key = k.replace('_l', '').replace('_r', '')
+            cleaned_key = re.sub(r'_[lr]$', '', k)     # ctrl_l/shift_r -> ctrl/shift，但保留 caps_lock 等
             keys.append(cleaned_key.upper())
         return "键盘 " + " + ".join(sorted(keys))
     elif combo_type == "joystick":
@@ -346,7 +370,8 @@ class InputSettingDialog(QDialog):
         self.current_combo = ()
         
         # 最终要返回给主控件的设置
-        self.final_setting = ('none', ())
+        self.final_setting = (None, ())
+        self._worker_connected = False
 
         self.setWindowTitle("设置按键")
         self.setMinimumSize(400, 200)
@@ -388,6 +413,15 @@ class InputSettingDialog(QDialog):
         self.worker.key_combo_pressed.connect(self._on_key_combo)
         self.worker.joystick_combo_pressed.connect(self._on_joystick_combo)
         self.worker.mousebutton_combo_pressed.connect(self._on_mousebutton_combo)
+        self._worker_connected = True
+
+    def _disconnect_worker(self):
+        if not self._worker_connected:
+            return
+        self._worker_connected = False
+        self.worker.key_combo_pressed.disconnect(self._on_key_combo)
+        self.worker.joystick_combo_pressed.disconnect(self._on_joystick_combo)
+        self.worker.mousebutton_combo_pressed.disconnect(self._on_mousebutton_combo)
 
     def _on_key_combo(self, combo: tuple[str, ...]):
         if not self.input_type:
@@ -439,11 +473,10 @@ class InputSettingDialog(QDialog):
         """供外部调用以获取最终设置"""
         return self.final_setting
 
-    def closeEvent(self, event):
-        """在关闭对话框时断开信号连接，防止内存泄漏"""
-        self.worker.key_combo_pressed.disconnect(self._on_key_combo)
-        self.worker.joystick_combo_pressed.disconnect(self._on_joystick_combo)
-        super().closeEvent(event)
+    def done(self, result):
+        """对话框通过 accept/reject/关闭 结束时都会经过这里（accept/reject 不会触发 closeEvent）"""
+        self._disconnect_worker()
+        super().done(result)
 
 
 @dataclass
@@ -454,12 +487,11 @@ class InputSetting:
     @staticmethod
     def load_from_dict(data: dict) -> 'InputSetting':
         ret = InputSetting()
-        if data is None:
+        if not isinstance(data, dict):
             return ret
         ret.type = data.get('type')
-        ret.combo = data.get('combo', tuple())
-        if ret.combo is not None:
-            ret.combo = tuple(ret.combo)
+        combo = data.get('combo')
+        ret.combo = tuple(combo) if isinstance(combo, (list, tuple)) else tuple()
         return ret
 
 
@@ -505,8 +537,11 @@ class InputSettingWidget(QWidget):
     def _open_setting_dialog(self):
         """打开设置对话框"""
         dialog = InputSettingDialog(self.worker, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._setting_type, self._setting_combo = dialog.get_setting()
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        setting = dialog.get_setting() if accepted else None
+        dialog.deleteLater()    # 否则每次打开都会残留一个以本控件为父对象的隐藏对话框
+        if setting is not None:
+            self._setting_type, self._setting_combo = setting
             self._setting_combo = tuple(sorted(self._setting_combo))    # 排序以保证一致性
             info(f"Setting confirmed: Type={self._setting_type}, Combo={self._setting_combo}")
             self._update_button_text()

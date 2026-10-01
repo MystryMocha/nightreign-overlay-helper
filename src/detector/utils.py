@@ -140,6 +140,31 @@ def _apply_processing(img: Image.Image, processing: str, region) -> Image.Image:
     return img
 
 
+def _resolve_region_origin(region: tuple[int, int, int, int]) -> tuple[int, int]:
+    """区域左上角在截图画面中的位置（区域坐标位于任一屏幕内时即为其本身，否则按主屏幕偏移换算）"""
+    x, y = region[0], region[1]
+    monitors = get_monitors()
+    if not monitors:
+        return x, y
+
+    for monitor in monitors[1:]:
+        if (monitor["left"] <= x < monitor["left"] + monitor["width"] and
+                monitor["top"] <= y < monitor["top"] + monitor["height"]):
+            return x, y
+
+    main_screen = monitors[1]
+    abs_x = x + main_screen["left"]
+    abs_y = y + main_screen["top"]
+
+    for monitor in monitors[1:]:
+        if (monitor["left"] <= abs_x < monitor["left"] + monitor["width"] and
+                monitor["top"] <= abs_y < monitor["top"] + monitor["height"]):
+            return abs_x, abs_y
+
+    warning(f"Region {region} could not be mapped to any screen. Using fallback method.")
+    return abs_x, abs_y
+
+
 def grab_region(engine: ScreencapEngine, region: tuple[int, int, int, int], processing: str = 'none') -> Image.Image:
     """
     截取屏幕区域并可选地进行图像处理
@@ -153,42 +178,21 @@ def grab_region(engine: ScreencapEngine, region: tuple[int, int, int, int], proc
             - 'hdr_to_sdr': 使用HDR到SDR转换（适用于缩圈倒计时）
     """
     x, y, w, h = region
+    w, h = int(w), int(h)
     if w <= 0 or h <= 0:
         raise ValueError(f"Invalid region size: w={w}, h={h}")
 
     full_img = engine.grab_fullscreen()
-    full_array = np.array(full_img)
-
-    def crop(y0: int, x0: int) -> Image.Image:
-        sub = full_array[y0:y0 + h, x0:x0 + w]
-        if sub.size == 0 or sub.shape[0] != h or sub.shape[1] != w:
-            raise ScreencapRuntimeError(
-                "grab_failed",
-                f"Captured frame {full_array.shape[1]}x{full_array.shape[0]} "
-                f"cannot contain region {region}",
-            )
-        return _apply_processing(Image.fromarray(sub), processing, region)
-
-    monitors = get_monitors()
-    if not monitors:
-        return crop(y, x)
-
-    for monitor in monitors[1:]:
-        if (monitor["left"] <= x < monitor["left"] + monitor["width"] and
-                monitor["top"] <= y < monitor["top"] + monitor["height"]):
-            return crop(y, x)
-
-    main_screen = monitors[1]
-    abs_x = x + main_screen["left"]
-    abs_y = y + main_screen["top"]
-
-    for monitor in monitors[1:]:
-        if (monitor["left"] <= abs_x < monitor["left"] + monitor["width"] and
-                monitor["top"] <= abs_y < monitor["top"] + monitor["height"]):
-            return crop(abs_y, abs_x)
-
-    warning(f"Region {region} could not be mapped to any screen. Using fallback method.")
-    return crop(abs_y, abs_x)
+    x0, y0 = _resolve_region_origin(region)
+    x0, y0 = int(x0), int(y0)
+    frame_w, frame_h = full_img.size
+    if x0 < 0 or y0 < 0 or x0 + w > frame_w or y0 + h > frame_h:
+        raise ScreencapRuntimeError(
+            "grab_failed",
+            f"Captured frame {frame_w}x{frame_h} cannot contain region {region}",
+        )
+    # 先裁剪再转换：4K 整帧复制一次约几十毫秒，而检测每个周期要截取多次
+    return _apply_processing(full_img.crop((x0, y0, x0 + w, y0 + h)), processing, region)
 
 
 DEFAULT_FONT_PATH = get_data_path("fonts/SourceHanSansSC-Normal.otf")

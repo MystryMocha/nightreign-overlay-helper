@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from PIL import Image
 import time
 from src.screencap import ScreencapEngine
-import yaml
 
 from src.config import Config
-from src.logger import info, warning, error, debug
+from src.logger import error, debug
+from src.screencap import ScreencapRuntimeError
 from src.common import get_data_path
 from src.detector.utils import resize_by_height_keep_aspect_ratio, grab_region
 
@@ -24,7 +24,6 @@ def get_image_mask(image: Image.Image) -> np.ndarray:
     return mask
 
 def match_mask(image: np.ndarray, template: np.ndarray) -> float:
-    t = time.time()
     scale_range = np.linspace(*Config.get().scale_range, endpoint=True)
     score = float('inf')
     for scale in scale_range:
@@ -88,7 +87,7 @@ class DayDetector:
             )
             self.templates[lang] = template
 
-    def match(self, engine: ScreencapEngine, template: DayTempalte, params: DayDetectParam) -> tuple[bool, float]:
+    def match(self, engine: ScreencapEngine, template: DayTempalte, params: DayDetectParam) -> tuple[float, float, float]:
         try:
             config = Config.get()
             t = time.time()
@@ -118,8 +117,10 @@ class DayDetector:
             score_day3 = match_region(day3_region, template.day3_mask)
             debug(f"detect dayx time: {time.time() - t} lang: {template.lang} score: {score_day1:.2f}, {score_day2:.2f}, {score_day3:.2f}")
             return score_day1, score_day2, score_day3
+        except ScreencapRuntimeError:
+            raise   # 截图失败交给调用方统一限频记录，这里每次检测都记录会刷屏
         except Exception as e:
-            error(f"Detect dayx error")
+            error(f"Detect dayx error: {e}")
             return float('inf'), float('inf'), float('inf')
 
     def detect(self, engine: ScreencapEngine, params: DayDetectParam | None) -> DayDetectResult:

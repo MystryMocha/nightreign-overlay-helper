@@ -10,8 +10,8 @@ import random
 import gc
 
 from src.config import Config
-from src.logger import info, warning, error, debug, is_debug_enabled
-from src.common import get_appdata_path, get_data_path
+from src.logger import info, warning, error, debug, is_debug_enabled, get_debug_file_path
+from src.common import get_data_path
 from src.detector.map_info import (
     load_map_info, 
     STD_MAP_SIZE, 
@@ -291,15 +291,15 @@ class MapDetector:
                         base_image=self._get_poi_image(ctype, with_subicon=False),
                         subtypes={},
                     )
-                info = self.poi_cate_info[poi_key]
+                cate_info = self.poi_cate_info[poi_key]
                 subicon = CTYPE_SUBICON_MAP.get(ctype)
-                if subicon not in info.subtypes:
-                    info.subtypes[subicon] = SubPoiInfo(
+                if subicon not in cate_info.subtypes:
+                    cate_info.subtypes[subicon] = SubPoiInfo(
                         ctypes=set(),
                         image=self._get_poi_image(ctype, with_subicon=True),
                     )
-                info.subtypes[subicon].ctypes.add(ctype)
-                self.all_poi_images[ctype] = info.subtypes[subicon].image
+                cate_info.subtypes[subicon].ctypes.add(ctype)
+                self.all_poi_images[ctype] = cate_info.subtypes[subicon].image
         # 无建筑
         self.all_poi_images[0] = Image.new("RGBA", STD_POI_SIZE, (0, 0, 0, 0))
         self.poi_cate_info[0] = PoiCategoryInfo(
@@ -436,16 +436,17 @@ class MapDetector:
 
         detected = {idx for idx, s in scores.items() if s >= config.crystal_detect_threshold}
 
-        # 保存结果用于调试
-        vis = img.copy()
-        for idx, (xr, yr) in self.crystal_info.crystals.items():
-            color = (0, 255, 0) if idx in detected else (255, 0, 0)
-            cx, cy = int(xr * w), int(yr * h)
-            cv2.rectangle(vis, (cx + ox - max_offset, cy + oy - max_offset),
-                          (cx + ox + tw + max_offset, cy + oy + th + max_offset), color, 1)
-            cv2.putText(vis, f"{idx}:{scores[idx]:.2f}", (cx + ox + tw + max_offset, cy),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-        cv2.imwrite(get_appdata_path("map_crystal_result.jpg"), cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+        # 保存结果用于调试（仅开启调试日志时）
+        if is_debug_enabled():
+            vis = img.copy()
+            for idx, (xr, yr) in self.crystal_info.crystals.items():
+                color = (0, 255, 0) if idx in detected else (255, 0, 0)
+                cx, cy = int(xr * w), int(yr * h)
+                cv2.rectangle(vis, (cx + ox - max_offset, cy + oy - max_offset),
+                              (cx + ox + tw + max_offset, cy + oy + th + max_offset), color, 1)
+                cv2.putText(vis, f"{idx}:{scores[idx]:.2f}", (cx + ox + tw + max_offset, cy),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+            cv2.imwrite(get_debug_file_path("map_crystal_result.jpg"), cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
 
         info(f"MapDetector: Detect destroyed crystals: {sorted(detected)}, "
              f"scores: { {k: round(v, 2) for k, v in sorted(scores.items())} }, time cost: {time.time() - t:.4f}s")
@@ -532,11 +533,11 @@ class MapDetector:
     def _match_poi(self, map_img: np.ndarray, map_bg: np.ndarray, pos: Position, earth_shifting: int, nightlord: int | None = None) -> tuple[int, float]:
         img = map_img[
             pos[1]-STD_POI_SIZE[1]//2:pos[1]-STD_POI_SIZE[1]//2+STD_POI_SIZE[1],
-            pos[0]-STD_POI_SIZE[0]//2:pos[0]-STD_POI_SIZE[1]//2+STD_POI_SIZE[0],
+            pos[0]-STD_POI_SIZE[0]//2:pos[0]-STD_POI_SIZE[0]//2+STD_POI_SIZE[0],
         ]
         bg = map_bg[
             pos[1]-STD_POI_SIZE[1]//2:pos[1]-STD_POI_SIZE[1]//2+STD_POI_SIZE[1],
-            pos[0]-STD_POI_SIZE[0]//2:pos[0]-STD_POI_SIZE[1]//2+STD_POI_SIZE[0],
+            pos[0]-STD_POI_SIZE[0]//2:pos[0]-STD_POI_SIZE[0]//2+STD_POI_SIZE[0],
         ]
         
 
@@ -562,8 +563,7 @@ class MapDetector:
             possible_ctypes.update(self.info.possible_poi_types.get((earth_shifting, nl, pos), set()))
 
         # print("pos:", pos, "possible ctypes:", possible_ctypes)
-        for poi_key, info in self.poi_cate_info.items():
-            t = time.time()
+        for poi_key in self.poi_cate_info:
             if not any(match_prefix(ctype, poi_key) for ctype in possible_ctypes):
                 continue    # 仅匹配该位置可能出现的POI类型
             
@@ -609,10 +609,9 @@ class MapDetector:
         best_subicon = None
         best_subicon_score = float('inf')
 
-        for subicon, info in self.poi_cate_info[best_poi_key].subtypes.items():
+        for subicon in self.poi_cate_info[best_poi_key].subtypes:
             if not subicon:
                 continue
-            t = time.time()
             subicon_img = SUBICON_IMAGES[subicon]
             for s in np.linspace(SCALE_RANGE[0], SCALE_RANGE[1], SCALE_RANGE[2], endpoint=True):
                 size = (int(DOWNSAMPLE_SIZE[0] * s * 0.3), int(DOWNSAMPLE_SIZE[1] * s * 0.3))
@@ -704,9 +703,10 @@ class MapDetector:
             paste_cv2(poi_result_img, np.array(self.all_poi_images[ctype])[..., :3], (x-STD_POI_SIZE[0]//2, y-STD_POI_SIZE[1]//2))
             cv2.circle(poi_result_img, (x, y), 2, (255, 0, 0), 3)
 
-        # 保存结果用于调试
-        cv2.imwrite(get_appdata_path(f"map.jpg"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-        cv2.imwrite(get_appdata_path(f"map_poi_result.jpg"), cv2.cvtColor(poi_result_img, cv2.COLOR_RGB2BGR))
+        # 保存结果用于调试（仅开启调试日志时）
+        if is_debug_enabled():
+            cv2.imwrite(get_debug_file_path("map.jpg"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(get_debug_file_path("map_poi_result.jpg"), cv2.cvtColor(poi_result_img, cv2.COLOR_RGB2BGR))
 
         # 匹配地图模式
         EMPTY_CONSTRUCTION = Construct(type=0, pos=0, is_display=False)
@@ -989,8 +989,9 @@ class MapDetector:
 
         info(f"Draw overlay image size: {draw_size} time cost: {time.time() - t:.4f}s")
 
-        # 保存结果用于调试
-        img.convert('RGB').save(get_appdata_path(f"map_overlay_result_{result_index}.jpg"))
+        # 保存结果用于调试（仅开启调试日志时）
+        if is_debug_enabled():
+            img.convert('RGB').save(get_debug_file_path(f"map_overlay_result_{result_index}.jpg"))
 
         return img
 
@@ -1014,7 +1015,7 @@ class MapDetector:
             if is_debug_enabled():
                 try:
                     cv2.imwrite(
-                        get_appdata_path("debug_map_input.jpg"),
+                        get_debug_file_path("debug_map_input.jpg"),
                         cv2.cvtColor(img, cv2.COLOR_RGB2BGR),
                     )
                 except Exception:

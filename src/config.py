@@ -1,5 +1,6 @@
-import yaml
 import os
+import threading
+import time
 from dataclasses import dataclass, fields
 
 from .common import load_yaml, save_yaml, get_appdata_path
@@ -7,9 +8,13 @@ from .common import load_yaml, save_yaml, get_appdata_path
 CONFIG_PATH = "config.yaml"
 # 用户在设置界面修改的参数保存在这里，覆盖 config.yaml 中的同名项（程序更新时不会被覆盖）
 CONFIG_OVERRIDE_FILENAME = "config_override.yaml"
+# 检查配置文件是否被修改的最小间隔(秒)，Config.get() 在各处被高频调用，不必每次都 stat
+CONFIG_CHECK_INTERVAL = 0.5
 
-_config: dict = {}
+_lock = threading.RLock()
+_config_obj: "Config | None" = None     # 最近一次成功加载的配置，配置文件损坏时继续使用
 _config_mtime = None
+_last_check_time: float = 0.0
 _override_path: str | None = None
 
 
@@ -24,6 +29,10 @@ def _get_mtime(path: str) -> float | None:
         return os.path.getmtime(path)
     except OSError:
         return None
+
+def _warn(msg: str):
+    from src.logger import warning
+    warning(msg)
 
 @dataclass
 class Config:
@@ -106,17 +115,49 @@ class Config:
 
     @staticmethod
     def get() -> 'Config':
-        global _config, _config_mtime
-        override_path = get_config_override_path()
-        mtime = (os.path.getmtime(CONFIG_PATH), _get_mtime(override_path))
-        if mtime != _config_mtime:
-            base = load_yaml(CONFIG_PATH)
-            override = Config.load_override() if mtime[1] is not None else {}
-            base.update({k: v for k, v in override.items() if k in base})
-            _config = base
-            _config_mtime = mtime
+        """
+        获取当前配置。配置文件被修改后会自动重新加载；
+        重新加载失败（如用户编辑到一半保存了损坏的 YAML、缺少必填项）时保留上一次成功加载的配置，
+        避免高频调用方（检测线程、定时器）因此崩溃
+        """
+        global _config_obj, _config_mtime, _last_check_time
+        with _lock:
+            now = time.monotonic()
+            if _config_obj is not None and now - _last_check_time < CONFIG_CHECK_INTERVAL:
+                return _config_obj
+            _last_check_time = now
+
+            override_path = get_config_override_path()
+            mtime = (_get_mtime(CONFIG_PATH), _get_mtime(override_path))
+            if _config_obj is None or mtime != _config_mtime:
+                _config_mtime = mtime     # 失败时也记录，避免对同一份损坏文件反复解析和刷日志
+                try:
+                    _config_obj = Config._load()
+                except Exception as e:
+                    if _config_obj is None:
+                        raise
+                    _warn(f"Failed to reload {CONFIG_PATH}, keep using previous config: {e}")
+            return _config_obj
+
+    @staticmethod
+    def _load() -> 'Config':
+        base = load_yaml(CONFIG_PATH, raise_on_error=True)
+        if not isinstance(base, dict):
+            raise ValueError(f"{CONFIG_PATH} is not a mapping")
+        override = Config.load_override()
+        base.update({k: v for k, v in override.items() if k in base})
+        missing = sorted(_CONFIG_FIELDS - set(base))
+        if missing:
+            raise ValueError(f"{CONFIG_PATH} is missing required keys: {', '.join(missing)}")
         # 忽略当前版本不认识的字段，避免 config.yaml 比程序新时整个检测线程崩溃
-        return Config(**{k: v for k, v in _config.items() if k in _CONFIG_FIELDS})
+        return Config(**{k: v for k, v in base.items() if k in _CONFIG_FIELDS})
+
+    @staticmethod
+    def invalidate():
+        """下次 Config.get() 时立即检查配置文件是否变化"""
+        global _last_check_time
+        with _lock:
+            _last_check_time = 0.0
 
     @staticmethod
     def get_default(key: str):
@@ -140,6 +181,7 @@ class Config:
         else:
             override[key] = value
         save_yaml(get_config_override_path(), override)
+        Config.invalidate()
 
     @staticmethod
     def clear_override(keys: list[str] | None = None):
@@ -147,5 +189,6 @@ class Config:
         for k in (keys if keys is not None else list(override.keys())):
             override.pop(k, None)
         save_yaml(get_config_override_path(), override)
+        Config.invalidate()
 
 _CONFIG_FIELDS = {f.name for f in fields(Config)}
