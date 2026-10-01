@@ -12,10 +12,10 @@ else:
     if _root not in sys.path:
         sys.path.insert(0, _root)
     os.chdir(_root)
-from PyQt6.QtCore import QThread, Qt, pyqtSignal, qInstallMessageHandler, QtMsgType
+from PyQt6.QtCore import QThread, Qt, qInstallMessageHandler, QtMsgType
 from PyQt6.QtGui import QIcon, QAction, QCursor
 from PyQt6.QtWidgets import (
-    QApplication, QSystemTrayIcon, QMenu
+    QApplication, QSystemTrayIcon, QMenu, QMessageBox
 )
 
 from src.ui.input import InputWorker
@@ -25,8 +25,9 @@ from src.ui.hp_overlay import HpOverlayWidget
 from src.ui.settings import SettingsWindow
 from src.ui.admin_prompt import show_admin_prompt
 from src.updater import Updater
-from src.common import APP_FULLNAME, APP_VERSION, ICON_PATH
-from src.logger import info, warning, error, LOG_DIR
+from src.common import APP_NAME, APP_FULLNAME, APP_VERSION, ICON_PATH
+from src.logger import info, warning, error, LOG_DIR, CRASH_LOG_MAX_BYTES
+from src.single_instance import acquire_single_instance
 from src.screencap import get_engine
 
 
@@ -70,7 +71,10 @@ def enable_crash_log():
     from datetime import datetime
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
-        crash_file = open(os.path.join(LOG_DIR, "crash.log"), "a", encoding="utf-8")
+        crash_path = os.path.join(LOG_DIR, "crash.log")
+        # 超过上限就重新开始记录，避免无限增长
+        mode = "w" if os.path.exists(crash_path) and os.path.getsize(crash_path) > CRASH_LOG_MAX_BYTES else "a"
+        crash_file = open(crash_path, mode, encoding="utf-8")
         crash_file.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} app v{APP_VERSION} started =====\n")
         crash_file.flush()
         faulthandler.enable(file=crash_file, all_threads=True)
@@ -111,14 +115,21 @@ if __name__ == "__main__":
         time.sleep(0.5)  # 等待以管理员身份启动的新实例拉起
         os._exit(0)
 
+    # 只允许一个实例运行：重复启动会得到两套全局键盘钩子、托盘图标和悬浮窗，并互相覆盖设置文件
+    # （放在管理员提权重启之后检查，此时旧实例已经决定退出，不会与提权后的新实例冲突）
+    if not acquire_single_instance(f"Local\\{APP_NAME}-single-instance"):
+        info("Another instance is already running, exit.")
+        QMessageBox.information(None, APP_FULLNAME, "程序已经在运行（请在系统托盘中查找图标）。")
+        os._exit(0)
+
     # 创建对象
-    input = InputWorker()
+    input_worker = InputWorker()
     overlay = OverlayWidget()
     map_overlay = MapOverlayWidget()
     hp_overlay = HpOverlayWidget()
 
-    updater = Updater(input, overlay, map_overlay, hp_overlay)
-    settings_window = SettingsWindow(overlay, map_overlay, updater, input)
+    updater = Updater(input_worker, overlay, map_overlay, hp_overlay)
+    settings_window = SettingsWindow(overlay, map_overlay, updater, input_worker)
     
     # 创建系统托盘图标和菜单
     tray_icon = QSystemTrayIcon()
@@ -189,8 +200,8 @@ if __name__ == "__main__":
 
     # 启动输入监听
     input_thread = QThread()
-    input.moveToThread(input_thread)
-    input_thread.started.connect(input.run)
+    input_worker.moveToThread(input_thread)
+    input_thread.started.connect(input_worker.run)
     input_thread.start()
     
     # 设置并启动后台检测器
@@ -204,24 +215,27 @@ if __name__ == "__main__":
         info("Stopping worker thread...")
         updater.stop()
         updater_thread.quit()
-        if not updater_thread.wait(1000):
-            print("Updater thread did not exit in time. Forcing termination.")
-            updater_thread.terminate()
-        else:
+        # 不使用 QThread.terminate()：线程可能正在原生截图库里（如连接时的测速），强杀可能导致锁/堆损坏而卡死。
+        # 超时后放弃等待，进程随后会直接退出
+        updater_stopped = updater_thread.wait(3000)
+        if updater_stopped:
             info("Updater thread stopped.")
-        input.stop()
-        input_thread.quit()
-        if not input_thread.wait(1000):
-            print("Input thread did not exit in time. Forcing termination.")
-            input_thread.terminate()
         else:
+            warning("Updater thread did not exit in time, abandon it.")
+        input_worker.stop()
+        input_thread.quit()
+        if input_thread.wait(3000):
             info("Input thread stopped.")
+        else:
+            warning("Input thread did not exit in time, abandon it.")
         info("All Thread stopped.")
 
-        try:
-            get_engine().shutdown()
-        except Exception as e:
-            warning(f"Error shutting down screencap engine: {e}")
+        # 更新线程仍在使用截图引擎时不能在这里释放它
+        if updater_stopped:
+            try:
+                get_engine().shutdown()
+            except Exception as e:
+                warning(f"Error shutting down screencap engine: {e}")
 
         tray_icon.deleteLater()
 

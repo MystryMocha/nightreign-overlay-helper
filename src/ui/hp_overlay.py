@@ -1,15 +1,10 @@
-from PyQt6.QtCore import Qt, QPoint, pyqtSignal
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QProgressBar, QLabel, QHBoxLayout, QSizePolicy
+    QWidget, QLabel, QSizePolicy
 )
-from PyQt6.QtGui import QMouseEvent, QKeySequence, QKeyEvent
-from dataclasses import dataclass, field
-from PyQt6.QtWidgets import QGraphicsDropShadowEffect
-from PyQt6.QtGui import QColor
+from dataclasses import dataclass
 
-from src.common import APP_FULLNAME, APP_AUTHOR
 from src.config import Config
-from src.logger import info, warning, error
 from src.ui.utils import set_widget_always_on_top, region_to_qt_region
 
 
@@ -90,7 +85,8 @@ class HpOverlayWidget(QWidget):
         x, y, w, h = self.hpbar_region
         y -= line_height  # 移动到血条上方
         h = line_height
-        self.setGeometry(x, y, w, h)
+        if self.geometry().getRect() != (x, y, w, h):
+            self.setGeometry(x, y, w, h)
 
         self.percent20line.move(int(self.width() * cfg.hpbar_low_hp_marker) - line_width // 2, 0)
         self.percent20line.resize(line_width, self.height())

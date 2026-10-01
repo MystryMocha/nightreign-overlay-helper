@@ -7,7 +7,8 @@ from PyQt6.QtGui import QPixmap
 from src.screencap import ScreencapEngine
 
 from src.config import Config
-from src.logger import info, warning, error, debug
+from src.logger import error, debug
+from src.screencap import ScreencapRuntimeError
 from src.detector.utils import grab_region
 
 
@@ -76,8 +77,10 @@ class RainDetector:
 
             debug(f"RainDetector: cost: {time.time() - t:.3f}s, not_in_rain_ratio={not_in_rain_ratio:.3f}, in_rain_ratio={in_rain_ratio:.3f}")
             return not_in_rain_ratio, in_rain_ratio
+        except ScreencapRuntimeError:
+            raise   # 截图失败交给调用方统一限频记录，这里每次检测都记录会刷屏
         except Exception as e:
-            error(f"Detect in rain error")
+            error(f"Detect in rain error: {e}")
             return 0.0, 0.0
 
     def detect(self, engine: ScreencapEngine, params: RainDetectParam | None) -> RainDetectResult:

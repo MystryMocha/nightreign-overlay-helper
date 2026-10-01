@@ -1,6 +1,5 @@
 from PyQt6.QtWidgets import QWidget, QApplication
-from PyQt6.QtCore import Qt
-from src.logger import info, warning, error
+from src.logger import info, warning
 
 
 def set_widget_always_on_top(widget: QWidget):
@@ -16,19 +15,25 @@ def set_widget_always_on_top(widget: QWidget):
         warning(f"Error setting system always on top: {e}")
 
 
-def is_window_in_foreground(window_title: str) -> bool:
+def is_window_in_foreground(window_title: str, process_name: str | None = None) -> bool:
     """
     检查包含特定标题的窗口是否在 Windows 的最前面。
+    指定 process_name 时还会核对窗口所属进程，避免把标题里恰好包含游戏名的浏览器标签页、资源管理器窗口当成游戏
+    （无法获取进程名时只按标题判断）
     """
     try:
         import win32gui
-        import time
         active_window_handle = win32gui.GetForegroundWindow()
         active_window_title = win32gui.GetWindowText(active_window_handle)
-        if window_title.lower() in active_window_title.lower():
-            return True
-        return False
-    except Exception as e:
+        if window_title.lower() not in active_window_title.lower():
+            return False
+        if process_name:
+            from src.screencap.hwnd_resolver import get_window_exe_name
+            exe_name = get_window_exe_name(active_window_handle)
+            if exe_name is not None and exe_name != process_name.lower():
+                return False
+        return True
+    except Exception:
         return False
 
 

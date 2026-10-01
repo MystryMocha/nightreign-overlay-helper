@@ -33,7 +33,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.wintypes as wt
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional
 
 __all__ = [
     "ImageBuffer",
@@ -84,9 +84,12 @@ def _load_dll() -> ctypes.CDLL:
     candidates = []
     if _dll_search_path:
         candidates.append(os.path.join(_dll_search_path, "MaaWin32Screencap.dll"))
-    for base in _default_search_paths():
-        if base:
-            candidates.append(os.path.join(base, "MaaWin32Screencap.dll"))
+    else:
+        # 只有没有显式指定目录时才在默认位置/环境变量/PATH 中查找：
+        # 本程序通常以管理员权限运行，显式指定目录后不能再回落到用户可写的位置去加载 DLL
+        for base in _default_search_paths():
+            if base:
+                candidates.append(os.path.join(base, "MaaWin32Screencap.dll"))
 
     errors = []
     for path in candidates:
@@ -99,12 +102,13 @@ def _load_dll() -> ctypes.CDLL:
         else:
             errors.append(f"{path}: not found")
 
-    # 兜底：依赖系统 PATH
-    try:
-        _dll = ctypes.CDLL("MaaWin32Screencap.dll")
-        return _dll
-    except OSError as e:  # pragma: no cover
-        errors.append(f"system PATH: {e}")
+    # 兜底：依赖系统 PATH（仅在没有显式指定目录时）
+    if not _dll_search_path:
+        try:
+            _dll = ctypes.CDLL("MaaWin32Screencap.dll")
+            return _dll
+        except OSError as e:  # pragma: no cover
+            errors.append(f"system PATH: {e}")
 
     raise RuntimeError(
         "无法加载 MaaWin32Screencap.dll。请用 set_dll_path() 指定目录，"

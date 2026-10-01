@@ -1,15 +1,15 @@
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QProgressBar, QLabel, QHBoxLayout, QSizePolicy
+    QApplication, QWidget, QVBoxLayout, QProgressBar, QLabel, QHBoxLayout
 )
-from PyQt6.QtGui import QMouseEvent, QKeySequence, QKeyEvent
-from dataclasses import dataclass, field
+from PyQt6.QtGui import QMouseEvent
+from dataclasses import dataclass
 from PyQt6.QtWidgets import QGraphicsDropShadowEffect
 from PyQt6.QtGui import QColor
 
-from src.common import APP_FULLNAME, APP_AUTHOR
+from src.common import APP_FULLNAME
 from src.config import Config
-from src.logger import info, warning, error
+from src.logger import info, warning
 from src.ui.utils import set_widget_always_on_top
 
 
@@ -262,9 +262,9 @@ class OverlayWidget(QWidget):
             self.art_label.setText(state.art_text)
         if state.art_progress_visible is not None:
             self.art_progress_visible = state.art_progress_visible
-        if state.art_color is not None:
+        if state.art_color is not None and state.art_color != self.art_color:
             self.art_color = state.art_color
-            self._apply_scale(self.scale) 
+            self._apply_scale(self.scale)
         if state.only_show_when_game_foreground is not None:
             self.only_show_when_game_foreground = state.only_show_when_game_foreground
         if state.is_game_foreground is not None:

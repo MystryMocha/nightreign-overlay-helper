@@ -3,7 +3,7 @@ import time
 from enum import Enum
 from PIL import Image
 
-from src.common import GAME_WINDOW_TITLE
+from src.common import GAME_WINDOW_TITLE, GAME_PROCESS_NAME
 from src.config import Config
 from src.logger import info, warning, error
 from src.ui.input import InputWorker
@@ -19,7 +19,6 @@ from src.detector import (
     HpDetectParam,
     ArtDetectParam,
 )
-from src.detector.map_info import MapPattern
 from src.ui.utils import is_window_in_foreground, get_qt_screen_by_region, process_region_to_adapt_scale
 from src.screencap import (
     get_engine,
@@ -54,7 +53,6 @@ class Updater(QObject):
     update_overlay_ui_state_signal = pyqtSignal(OverlayUIState)
     update_map_overlay_ui_state_signal = pyqtSignal(MapOverlayUIState)
     hp_overlay_ui_state_signal = pyqtSignal(HpOverlayUIState)
-    input_block_signals_signal = pyqtSignal(bool)
 
     def __init__(
         self, 
@@ -75,7 +73,7 @@ class Updater(QObject):
         self.only_detect_when_game_foreground: bool = False
         self.detect_interval = 0.2
 
-        self.input_block_signals_signal.connect(input.blockSignals)
+        self.input = input
 
         self.overlay = overlay
         self.update_overlay_ui_state_signal.connect(self.overlay.update_ui_state)
@@ -129,6 +127,11 @@ class Updater(QObject):
         # HDR图像处理设置
         self.hdr_processing_enabled: bool = False
 
+        # 主循环状态
+        self._last_detect_time: float = 0.0
+        self._last_init_error: str | None = None
+        self._throttled_log_times: dict[str, float] = {}
+
 
     def get_time(self) -> float:
         return time.time() * Config.get().time_scale
@@ -136,22 +139,24 @@ class Updater(QObject):
     # =============== Day and Phase Management =============== #
 
     def start_day1(self):
-        self.day = 1
+        # 快捷键在UI线程触发，而计时显示在检测线程读取这些状态，
+        # 所以先写好阶段信息，最后才设置 day
         self.current_phase = Phase.FIRST_CIRCLE_STABLE
         self.phase_start_time = self.get_time()
+        self.day = 1
         info("Day 1 started.")
         self.set_to_detect_map_pattern_once()
 
     def start_day2(self):
-        self.day = 2
         self.current_phase = Phase.FIRST_CIRCLE_STABLE
         self.phase_start_time = self.get_time()
+        self.day = 2
         info("Day 2 started.")
 
     def start_day3(self):
-        self.day = 3
         self.current_phase = Phase.NIGHT_BOSS
         self.phase_start_time = self.get_time()
+        self.day = 3
         info("Day 3 started.")
 
     def start_day_by_shortcut(self):
@@ -173,33 +178,31 @@ class Updater(QObject):
         if self.phase_start_time is not None:
             self.phase_start_time += Config.get().back_day_seconds
 
-    def get_phase_progress_text(self) -> tuple[float, str]:
-        if self.day is None:
-            progress = 0.0
-            text = None
-        elif self.day == 3:
+    def get_phase_progress_text(self) -> tuple[float, str | None]:
+        # 先取一份状态快照，避免计时状态被其他线程修改到一半
+        day, phase, start_time = self.day, self.current_phase, self.phase_start_time
+        if day is None or phase is None or start_time is None:
+            return 0.0, None
+        t = self.get_time() - start_time
+        if day == 3:
             progress = 4.0
-            t = self.get_time() - self.phase_start_time
-            text = f"{format_period(int(t))}"
-        elif self.current_phase == Phase.NIGHT_BOSS:
+            text = f"{format_period(max(int(t), 0))}"
+        elif phase == Phase.NIGHT_BOSS:
             progress = 4.0
-            t = self.get_time() - self.phase_start_time
-            text = f"夜晚BOSS战 {format_period(int(t))}"
+            text = f"夜晚BOSS战 {format_period(max(int(t), 0))}"
         else:
-            index = self.current_phase.value
-            t = self.get_time() - self.phase_start_time
+            index = phase.value
             total = Config.get().day_period_seconds[index]
             progress = t / total + index
             circle_no = "一" if index < 2 else "二"
             action_text = "开始缩圈" if index % 2 == 0 else "缩圈结束"
             text = f"{format_period(int(total - t))} 后第{circle_no}圈{action_text}"
-        if self.day is not None:
-            text = f"DAY {'I' * self.day} - " + text
+        text = f"DAY {'I' * day} - " + text
         return progress, text
     
     def update_phase_timer(self):
         config = Config.get()
-        if self.current_phase is not None:
+        if self.current_phase is not None and self.phase_start_time is not None:
             index = self.current_phase.value
             phase_length = None if index >= 4 else config.day_period_seconds[index]
             if phase_length is not None and self.get_time() - self.phase_start_time > phase_length:
@@ -513,16 +516,23 @@ class Updater(QObject):
                 self.update_overlay_ui_state_signal.emit(OverlayUIState(
                     map_pattern_match_text="",
                 ))
-                result = self.detector.detect(DetectParam(
-                    map_detect_param=MapDetectParam(
-                        map_region=self.map_region,
-                        img=map_img,
-                        earth_shifting=earth_shifting,
-                        do_match_pattern=True,
-                        hdr_processing_enabled=self.hdr_processing_enabled,
-                        return_pattern_topk=self.map_pattern_return_topk,
-                    )
-                ))
+                try:
+                    result = self.detector.detect(DetectParam(
+                        map_detect_param=MapDetectParam(
+                            map_region=self.map_region,
+                            img=map_img,
+                            earth_shifting=earth_shifting,
+                            do_match_pattern=True,
+                            hdr_processing_enabled=self.hdr_processing_enabled,
+                            return_pattern_topk=self.map_pattern_return_topk,
+                        )
+                    ))
+                except Exception as e:
+                    # 识别失败时不能让悬浮窗一直停在"正在识别中"，清除后在下次打开地图时重试
+                    error(f"Map pattern matching failed: {e}")
+                    self.update_map_overlay_images(None)
+                    self.map_pattern_retry_on_next_open = True
+                    return
                 self.update_map_overlay_images(result.map_detect_result.overlay_images, earth_shifting=earth_shifting)
                 self.last_map_pattern_match_time = self.get_time()
                 self.current_earth_shifting = earth_shifting
@@ -604,11 +614,11 @@ class Updater(QObject):
             return 0.0, "", None
         
         config = Config.get()
-        info = config.art_info[self.art_type]
-        delay = info.get("delay", 0)
-        duration = info.get("duration", 0)
-        text = info.get("text", "")
-        color = info.get("color", "#ffffff")
+        art_cfg = config.art_info[self.art_type]
+        delay = art_cfg.get("delay", 0)
+        duration = art_cfg.get("duration", 0)
+        text = art_cfg.get("text", "")
+        color = art_cfg.get("color", "#ffffff")
 
         t = max(0, self.get_time() - self.art_start_time - delay)
         if t > duration:
@@ -622,6 +632,13 @@ class Updater(QObject):
         
     # =============== Main Loop =============== #
 
+    def _log_throttled(self, level_fn, key: str, msg: str, interval: float = 10.0):
+        """同一个 key 的日志最多每 interval 秒输出一次，避免持续性故障（如游戏最小化）时刷屏"""
+        now = time.time()
+        if now - self._throttled_log_times.get(key, 0.0) >= interval:
+            self._throttled_log_times[key] = now
+            level_fn(msg)
+
     def detect_and_update_all(self):
         for detect_fn in [
             self.detect_and_update_dayx,
@@ -633,14 +650,17 @@ class Updater(QObject):
             try:
                 detect_fn()
             except ScreencapRuntimeError as e:
-                warning(f"Screen capture failed during {detect_fn.__name__}: {e}. Skipping.")
+                # 可能是截图本身失败，也可能只是某个检测区域超出了画面，所以各检测互不影响
+                self._log_throttled(warning, f"capture:{detect_fn.__name__}",
+                                    f"Screen capture failed during {detect_fn.__name__}: {e}. Skipping.")
             except Exception as e:
                 # 单次检测出错不应导致整个检测线程退出（例如游戏刚启动时的异常画面）
-                error(f"Unexpected error during {detect_fn.__name__}: {e}. Skipping.")
+                self._log_throttled(error, f"detect:{detect_fn.__name__}:{e}",
+                                    f"Unexpected error during {detect_fn.__name__}: {e}. Skipping.")
 
     def check_game_foreground(self) -> bool:
-        is_foreground = is_window_in_foreground(GAME_WINDOW_TITLE)
-        
+        is_foreground = is_window_in_foreground(GAME_WINDOW_TITLE, GAME_PROCESS_NAME)
+
         self.update_overlay_ui_state_signal.emit(OverlayUIState(
             is_game_foreground=is_foreground,
         ))
@@ -649,81 +669,89 @@ class Updater(QObject):
         ))
         self.hp_overlay_ui_state_signal.emit(HpOverlayUIState(
             is_game_foreground=is_foreground,
+            only_show_when_game_foreground=self.only_detect_when_game_foreground,
+            is_menu_opened=self.is_menu_opened,
+            is_setting_opened=self.is_setting_opened,
         ))
 
-        self.input_block_signals_signal.emit(self.only_detect_when_game_foreground and \
+        # 直接设置标志位：输入线程一直阻塞在 run() 里没有事件循环，通过信号队列调用 blockSignals 永远不会执行
+        self.input.set_signals_blocked(self.only_detect_when_game_foreground and \
             not (is_foreground or self.is_setting_opened or self.is_menu_opened))
-        
+
         return is_foreground
 
-    def run(self):
+    def ensure_engine_connected(self, engine) -> bool:
+        """保证截图引擎已连接（必要时重连），返回当前是否可用于检测"""
+        if engine.status == EngineStatus.CONNECTED and \
+                self.screencap_mode != self._applied_screencap_mode:
+            info(f"Screencap mode changed to {self.screencap_mode.name}, reconnecting engine.")
+            engine.shutdown()
+        reconnect_reason = engine.check_reconnect_reason()
+        if reconnect_reason is not None:
+            # 游戏退出/重启后旧连接失效，断开后由下面的逻辑重新绑定新的游戏窗口
+            warning(f"Screencap connection lost ({reconnect_reason}), reconnecting engine.")
+            engine.shutdown()
+        if engine.status == EngineStatus.CONNECTED:
+            return True
         try:
-            self._running = True
-            info("Updater started.")
+            engine.initialize(self.screencap_mode)
+            self._applied_screencap_mode = self.screencap_mode
+            self._last_init_error = None
+            return True
+        except ScreencapInitError as e:
+            # 游戏未启动时会持续失败，相同错误只提示一次，避免刷屏
+            if str(e) != self._last_init_error:
+                warning(f"ScreencapEngine init failed: {e}. Will keep retrying until the game window is available.")
+                self._last_init_error = str(e)
+            return False
 
-            last_detect_time = 0
-            last_init_error: str | None = None
-            while self._running:
-                start_time = self.get_time()
+    def run_once(self):
+        """主循环的一次迭代"""
+        start_time = self.get_time()
 
-                engine = get_engine()
-                if engine.status == EngineStatus.CONNECTED and \
-                        self.screencap_mode != self._applied_screencap_mode:
-                    info(f"Screencap mode changed to {self.screencap_mode.name}, reconnecting engine.")
-                    engine.shutdown()
-                reconnect_reason = engine.check_reconnect_reason()
-                if reconnect_reason is not None:
-                    # 游戏退出/重启后旧连接失效，断开后由下面的逻辑重新绑定新的游戏窗口
-                    warning(f"Screencap connection lost ({reconnect_reason}), reconnecting engine.")
-                    engine.shutdown()
-                if engine.status != EngineStatus.CONNECTED:
-                    try:
-                        engine.initialize(self.screencap_mode)
-                        self._applied_screencap_mode = self.screencap_mode
-                        last_init_error = None
-                    except ScreencapInitError as e:
-                        # 游戏未启动时会持续失败，相同错误只提示一次，避免刷屏
-                        if str(e) != last_init_error:
-                            warning(f"ScreencapEngine init failed: {e}. Will keep retrying until the game window is available.")
-                            last_init_error = str(e)
-                        time.sleep(Config.get().update_interval)
-                        continue
+        # 截图引擎不可用时只跳过检测：手动快捷键计时和悬浮窗刷新不依赖截图，必须照常更新
+        engine_ready = self.ensure_engine_connected(get_engine())
 
-                is_game_foreground = self.check_game_foreground()
+        is_game_foreground = self.check_game_foreground()
 
-                if self.get_time() - last_detect_time > self.detect_interval:
-                    if not self.only_detect_when_game_foreground or is_game_foreground:
-                        self.detect_and_update_all()
-                    last_detect_time = self.get_time()
+        if engine_ready and self.get_time() - self._last_detect_time > self.detect_interval:
+            if not self.only_detect_when_game_foreground or is_game_foreground:
+                self.detect_and_update_all()
+            self._last_detect_time = self.get_time()
 
-                self.update_phase_timer()
-                day_progress, day_text = self.get_phase_progress_text()
-                rain_progress, rain_text = self.get_in_rain_progress_text()
-                art_progress, art_text, art_color = self.get_art_progress_text_color()
+        self.update_phase_timer()
+        day_progress, day_text = self.get_phase_progress_text()
+        rain_progress, rain_text = self.get_in_rain_progress_text()
+        art_progress, art_text, art_color = self.get_art_progress_text_color()
 
-                self.update_overlay_ui_state_signal.emit(OverlayUIState(
-                    day_progress=day_progress,
-                    day_text=day_text,
-                    rain_progress=rain_progress,
-                    rain_text=rain_text,
-                    rain_progress_visible=rain_progress > 0.0,
-                    art_progress=art_progress,
-                    art_text=art_text,
-                    art_progress_visible=art_progress > 0.0,
-                    art_color=art_color,
-                ))
+        self.update_overlay_ui_state_signal.emit(OverlayUIState(
+            day_progress=day_progress,
+            day_text=day_text,
+            rain_progress=rain_progress,
+            rain_text=rain_text,
+            rain_progress_visible=rain_progress > 0.0,
+            art_progress=art_progress,
+            art_text=art_text,
+            art_progress_visible=art_progress > 0.0,
+            art_color=art_color,
+        ))
 
-                elapsed = self.get_time() - start_time
-                sleep_time = Config.get().update_interval - elapsed
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+        elapsed = self.get_time() - start_time
+        sleep_time = Config.get().update_interval - elapsed
+        if sleep_time > 0:
+            time.sleep(sleep_time)
 
-        except Exception as e:
-            error(f"Exception in updater run: {e}")
-            raise e
+    def run(self):
+        self._running = True
+        info("Updater started.")
+        while self._running:
+            try:
+                self.run_once()
+            except Exception as e:
+                # 任何一次迭代出错都不能让检测线程退出，否则计时器和所有自动检测会一直停摆到重启
+                self._log_throttled(error, f"run:{type(e).__name__}:{e}", f"Exception in updater loop: {e}")
+                time.sleep(0.5)
         info("Updater stopped.")
 
     def stop(self):
         self._running = False
-
-

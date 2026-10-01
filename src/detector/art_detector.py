@@ -2,13 +2,11 @@ import cv2
 import numpy as np
 from dataclasses import dataclass
 from PIL import Image
-import time
-from PyQt6.QtGui import QPixmap
 from src.screencap import ScreencapEngine
 
 from src.config import Config
-from src.common import get_data_path, get_appdata_path
-from src.logger import info, warning, error
+from src.common import get_data_path
+from src.logger import info, debug, is_debug_enabled, get_debug_file_path
 from src.detector.utils import grab_region, resize_by_height_keep_aspect_ratio, match_template
 
 @dataclass
@@ -55,10 +53,11 @@ class ArtDetector:
             match, score = match_template(sc, art_img, config.art_detect_match_scales, mask=self.art_masks[art_type])
             if score < best_score:
                 best_art_type, best_score = art_type, score
-            info(f"Art type: {art_type}, score: {score:.4f}")
-        
-        # 保存用于调试
-        cv2.imwrite(get_appdata_path("last_art_sc.png"), cv2.cvtColor(sc, cv2.COLOR_RGB2BGR))
+            debug(f"Art type: {art_type}, score: {score:.4f}")
+
+        # 保存用于调试（仅开启调试日志时，文件位于日志目录中，随BUG反馈一起打包）
+        if is_debug_enabled():
+            cv2.imwrite(get_debug_file_path("last_art_sc.png"), cv2.cvtColor(sc, cv2.COLOR_RGB2BGR))
 
         if best_score < config.art_detect_threshold:
             ret.art_type = best_art_type
