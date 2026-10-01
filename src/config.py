@@ -105,6 +105,13 @@ class Config:
     hpbar_low_hp_marker: float
     hpbar_high_hp_marker: float
 
+    weapon_ocr_min_interval: float
+    weapon_change_threshold: float
+    weapon_hide_threshold: float
+    weapon_ocr_min_score: float
+    weapon_ocr_max_side: int
+    weapon_ocr_threads: int
+
     art_detect_standard_size: int
     art_detect_match_scales: tuple[float, float, int]
     art_detect_threshold: float

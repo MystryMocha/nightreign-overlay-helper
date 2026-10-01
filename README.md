@@ -11,6 +11,7 @@ Nightreign Overlay Helper is a utility program developed with PyQt6, designed to
 - Great Hollow crystal layout: from Day 2 the game marks crystals on the map; the helper recognizes these markers each time the map is opened and automatically shows the matching crystal layout (or the remaining candidate layouts).
 - Displays health percentage markers corresponding to "trigger when health is low" and "trigger when health is full" entries.
 - Displays countdowns for art buffs of certain characters.
+- Weapon info: recognizes the weapon name and affixes on the in-game weapon panel (OCR on a region you select) and shows the weapon's base attribute scaling and the concrete values of its affixes right behind each affix. Values come from unpacked game data; affixes without data in the dataset are marked as "no data".
 
 ## Build Instructions
 
@@ -29,6 +30,8 @@ Nightreign Overlay Helper is a utility program developed with PyQt6, designed to
     ```
 
     You can find the built executable in the `dist/nightreign-overlay-helper` directory.
+
+Run the tests with `uv run pytest tests` (the weapon detector tests run the bundled OCR models, so they take a few seconds).
 
 
 ## Development
@@ -56,6 +59,8 @@ The program recognizes game information by capturing screenshots of the game scr
 - The bundled font Source Han Sans SC is © Adobe and licensed under the SIL Open Font License 1.1; see `data/fonts/OFL.txt`.
 - Thanks to [Fuwish](https://github.com/Fuwishx) for map data support.
 - Thanks to [雀煊](https://space.bilibili.com/391379672) for sharing the Great Hollow crystal layout.
+- Weapon attribute scaling and affix values are derived from the unpacked data organized by [sganggs/nightreign-relic-checker](https://github.com/sganggs/nightreign-relic-checker) (GPL-3.0); the game data itself is copyrighted by FromSoftware / Bandai Namco. `data/weapons.json` can be regenerated with `scripts/build_weapon_data.py`.
+- Text recognition uses [RapidOCR](https://github.com/RapidAI/RapidOCR) (Apache-2.0).
 
 ---
 
@@ -72,6 +77,7 @@ The program recognizes game information by capturing screenshots of the game scr
 - 大空洞水晶布局：破除水晶后游戏会在地图上显示灰色水晶图标，每次打开地图时自动识别这些图标，并切换到包含所有已破除水晶的布局（无法唯一确定时显示所有候选布局的合并点位），也可用快捷键手动切换。
 - 显示“血量较低触发”与“满血时触发”的词条对应百分比血量位置标记。
 - 显示部分角色的绝招buff倒计时。
+- 武器信息：框选游戏里的武器信息面板，通过截屏文字识别（OCR）读取武器名和词条名，在对应词条的后面（或下方）显示武器的基础属性补正和词条的具体加成数值。数值来自游戏参数解包数据，数据里没有数值的词条会标注“暂无数值数据”。
 
 ## 构建
 
@@ -92,6 +98,8 @@ The program recognizes game information by capturing screenshots of the game scr
 
     构建完成的可执行文件位于 `dist/nightreign-overlay-helper` 目录下。
 
+运行测试：`uv run pytest tests`（武器信息的检测测试会实际运行内置的 OCR 模型，需要几秒钟）。
+
 
 ## 开发
 
@@ -110,6 +118,16 @@ uv run python scripts/verify_native.py   # 校验 native/*.dll 与 native/SHA256
 
 不想打包也可以直接双击仓库根目录的 `start.bat` 从源码运行：它会自动申请管理员权限，首次运行自动安装依赖，启动后不保留命令行窗口。
 
+#### 武器信息
+
+在设置的“武器信息”页勾选启用，设置“框选武器信息区域”的快捷键；在游戏里打开武器信息面板（要同时能看到武器名和词条文字）后按下快捷键，框选整块面板的文字区域即可。之后每次出现该面板，属性补正和词条数值会自动显示在对应文字旁边（可选择显示在词条下方或右侧，并调整字号）。
+
+- 词条档位在游戏里看不出来时，会同时列出各档数值，如 `魔力伤害 +6%/+9%/+12%（档位1/2/3）`；识别到“＋2”这样的档位标记时只显示对应档。
+- 属性补正是武器未强化时的基础值，评级参照艾尔登法环的常用划分（S≥175 / A≥140 / B≥90 / C≥60 / D≥25 / E），与游戏界面显示的字母可能因武器强化等级不同而有出入。
+- 带“（条件触发）”的词条，数值只在满足条件时生效。
+- 目前数据里只有伤害、异常累积、消耗等部分词条有具体数值，血量/专注值上限、减伤、回复等词条会显示“暂无数值数据”。
+- 识别在后台线程进行，约需 1 秒，画面变化后会先隐藏旧数值再显示新结果。相关参数（识别间隔、CPU 线程数等）见 `config.yaml` 中的 `weapon_*` 项。
+
 ## 安全性
 
 本程序的游戏信息识别通过截屏游戏画面实现，不涉及对游戏数据的修改或对游戏内存的读写。
@@ -120,3 +138,5 @@ uv run python scripts/verify_native.py   # 校验 native/*.dll 与 native/SHA256
 - 本程序随附的字体 Source Han Sans SC（思源黑体）© Adobe，依据 SIL Open Font License 1.1 授权，许可全文见 `data/fonts/OFL.txt`。
 - 感谢来自 [Fuwish](https://github.com/Fuwishx) 的地图解包数据支持。
 - 感谢来自 [雀煊](https://space.bilibili.com/391379672) 的大空洞水晶布局分享。
+- 武器属性补正与词条数值整理自 [sganggs/nightreign-relic-checker](https://github.com/sganggs/nightreign-relic-checker)（GPL-3.0）提供的解包数据，游戏数据版权归 FromSoftware / Bandai Namco 所有。`data/weapons.json` 可用 `scripts/build_weapon_data.py` 重新生成。
+- 文字识别使用 [RapidOCR](https://github.com/RapidAI/RapidOCR)（Apache-2.0）。

@@ -73,6 +73,14 @@ hpbar_recent_length_count: 10         # 记录过去多少次血条长度，用�
 hpbar_low_hp_marker: 0.4              # 低血量触发被动标记位置
 hpbar_high_hp_marker: 0.85            # 高血量触发被动标记位置
 
+# 武器信息（属性补正/词条数值）：截取武器信息面板，OCR 识别武器名和词条名
+weapon_ocr_min_interval: 0.6    # 两次文字识别的最小间隔(秒)
+weapon_change_threshold: 0.004  # 截图区域内明显变化的像素占比超过此值才重新识别（0~1）
+weapon_hide_threshold: 0.05     # 已标注的文字行画面变化（平均灰度差 0~1）超过此值时先隐藏旧标注，等待新识别结果
+weapon_ocr_min_score: 0.5       # 文字识别置信度下限，低于此值的文字行忽略
+weapon_ocr_max_side: 1600       # 识别前把截图缩小到最长边不超过此像素，越小越快但小字更容易识别错
+weapon_ocr_threads: 2           # 文字识别使用的 CPU 线程数，越大识别越快但越影响游戏帧率
+
 art_detect_standard_size: 50   # 绝招模板图片匹配标准尺寸(宽和高)
 art_detect_match_scales: [0.95, 1.05, 5]  # 绝招模板匹配缩放范围(最小比例,最大比例,步数)
 art_detect_threshold: 0.02     # 绝招模板匹配得分阈值（越低越敏感）

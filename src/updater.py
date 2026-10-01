@@ -10,6 +10,7 @@ from src.ui.input import InputWorker
 from src.ui.overlay import OverlayWidget, OverlayUIState
 from src.ui.map_overlay import MapOverlayWidget, MapOverlayUIState
 from src.ui.hp_overlay import HpOverlayWidget, HpOverlayUIState
+from src.ui.weapon_overlay import WeaponOverlayWidget, WeaponOverlayUIState
 from src.detector import (
     DetectorManager, 
     DetectParam, 
@@ -18,6 +19,7 @@ from src.detector import (
     MapDetectParam,
     HpDetectParam,
     ArtDetectParam,
+    WeaponDetectParam,
 )
 from src.ui.utils import is_window_in_foreground, get_qt_screen_by_region, process_region_to_adapt_scale
 from src.screencap import (
@@ -53,6 +55,8 @@ class Updater(QObject):
     update_overlay_ui_state_signal = pyqtSignal(OverlayUIState)
     update_map_overlay_ui_state_signal = pyqtSignal(MapOverlayUIState)
     hp_overlay_ui_state_signal = pyqtSignal(HpOverlayUIState)
+    weapon_overlay_ui_state_signal = pyqtSignal(WeaponOverlayUIState)
+    weapon_status_signal = pyqtSignal(str)     # 武器信息的文字识别组件状态，空字符串表示正常，否则为错误原因
 
     def __init__(
         self, 
@@ -60,6 +64,7 @@ class Updater(QObject):
         overlay: OverlayWidget, 
         map_overlay: MapOverlayWidget,
         hp_overlay: HpOverlayWidget,
+        weapon_overlay: WeaponOverlayWidget,
     ):
         super().__init__()
         self._running = False
@@ -117,6 +122,15 @@ class Updater(QObject):
         self.hp_detect_keep_last_valid: bool = False
         self.hpbar_region: tuple[int] = None
         self.hp_length: int = None
+
+        self.weapon_overlay = weapon_overlay
+        self.weapon_overlay_ui_state_signal.connect(self.weapon_overlay.update_ui_state)
+        self.weapon_detect_enabled: bool = False
+        self.weapon_region: tuple[int] = None
+        self.weapon_overlay_visible: bool = True
+        self._weapon_stale: bool | None = None
+        self._weapon_ocr_error: str | None = None
+        self._weapon_own_texts: set[str] = set()    # 悬浮窗正在显示的文案，识别时忽略，避免截到自己画的字
 
         self.art_detect_enabled: bool = False
         self.to_detect_art_time: float = 0.0
@@ -630,6 +644,54 @@ class Updater(QObject):
         text = f"{text} {format_period(int(max(duration - t, 0)))}"
         return progress, text, color
         
+    # =============== Weapon Info Management =============== #
+
+    def toggle_weapon_overlay_by_shortcut(self):
+        self.weapon_overlay_visible = not self.weapon_overlay_visible
+        self.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(visible=self.weapon_overlay_visible))
+        info(f"Weapon overlay visible: {self.weapon_overlay_visible}")
+
+    def detect_and_update_weapon(self):
+        if not self.weapon_detect_enabled or self.weapon_region is None:
+            # 功能关闭或区域被清除：让检测器清掉已显示的标注（只会通知一次）
+            result = self.detector.detect(DetectParam(weapon_detect_param=WeaponDetectParam(region=None)))
+            if result.weapon_detect_result.updated:
+                self._weapon_own_texts = set()
+                self._weapon_stale = None
+                self.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(
+                    annotations=[], line_boxes=[], stale=False,
+                ))
+            return
+
+        region = tuple(self.weapon_region)
+        result = self.detector.detect(DetectParam(
+            weapon_detect_param=WeaponDetectParam(
+                region=region,
+                hdr_processing_enabled=self.hdr_processing_enabled,
+                ignore_texts=self._weapon_own_texts,
+            )
+        )).weapon_detect_result
+
+        state = WeaponOverlayUIState()
+        changed = False
+        if result.updated:
+            self._weapon_own_texts = {a.text for a in result.annotations}
+            state.annotations = result.annotations
+            state.line_boxes = result.line_boxes
+            state.region = region
+            changed = True
+            info(f"Weapon info updated: {[(a.name, a.text) for a in result.annotations]}")
+            error_text = result.ocr_error or ""
+            if error_text != (self._weapon_ocr_error or ""):
+                self._weapon_ocr_error = error_text
+                self.weapon_status_signal.emit(error_text)
+        if result.stale != self._weapon_stale:
+            self._weapon_stale = result.stale
+            state.stale = result.stale
+            changed = True
+        if changed:
+            self.weapon_overlay_ui_state_signal.emit(state)
+
     # =============== Main Loop =============== #
 
     def _log_throttled(self, level_fn, key: str, msg: str, interval: float = 10.0):
@@ -646,6 +708,7 @@ class Updater(QObject):
             self.detect_and_update_map,
             self.detect_and_update_hp,
             self.detect_and_update_art,
+            self.detect_and_update_weapon,
         ]:
             try:
                 detect_fn()
@@ -672,6 +735,9 @@ class Updater(QObject):
             only_show_when_game_foreground=self.only_detect_when_game_foreground,
             is_menu_opened=self.is_menu_opened,
             is_setting_opened=self.is_setting_opened,
+        ))
+        self.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(
+            is_game_foreground=is_foreground,
         ))
 
         # 直接设置标志位：输入线程一直阻塞在 run() 里没有事件循环，通过信号队列调用 blockSignals 永远不会执行
@@ -755,3 +821,4 @@ class Updater(QObject):
 
     def stop(self):
         self._running = False
+        self.detector.weapon_detector.stop()

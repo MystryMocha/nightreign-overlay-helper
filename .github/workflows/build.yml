@@ -34,7 +34,7 @@ jobs:
           uv run python scripts/ci_version.py --tag "$env:REF_NAME" --file pyproject.toml --check --set-github-env
         
       - name: Build with PyInstaller
-        run: uv run pyinstaller --name "nightreign-overlay-helper" --windowed --onefile --distpath "dist\nightreign-overlay-helper" --icon="assets\icon.ico" --add-data "pyproject.toml;." --add-binary "native\MaaWin32Screencap.dll;native" src\app.py
+        run: uv run pyinstaller --name "nightreign-overlay-helper" --windowed --onefile --distpath "dist\nightreign-overlay-helper" --icon="assets\icon.ico" --add-data "pyproject.toml;." --add-binary "native\MaaWin32Screencap.dll;native" --collect-all rapidocr src\app.py
 
       - name: Verify build artifact contains native DLL
         shell: pwsh

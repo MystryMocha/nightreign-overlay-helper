@@ -22,6 +22,8 @@ from src.logger import info, warning, error, set_log_level, INFO, DEBUG, LOG_DIR
 from src.config import Config
 from src.ui.overlay import OverlayUIState, OverlayWidget, MIN_OVERLAY_OPACITY
 from src.ui.map_overlay import MapOverlayWidget, MapOverlayUIState
+from src.ui.weapon_overlay import WeaponOverlayUIState
+from src.weapon.layout import POSITION_BELOW, POSITION_RIGHT
 from src.ui.input import InputWorker, InputSettingWidget, InputSetting
 from src.ui.capture_region import CaptureRegionWindow
 from src.detector.rain_detector import RainDetector
@@ -286,7 +288,7 @@ class SettingsWindow(QWidget):
     update_map_overlay_ui_state_signal = pyqtSignal(MapOverlayUIState)
     update_preset_list_signal = pyqtSignal(list)
 
-    TAB_TIMER, TAB_AUTO_TIMER, TAB_MAP, TAB_HP_ART, TAB_GENERAL = range(5)
+    TAB_TIMER, TAB_AUTO_TIMER, TAB_MAP, TAB_WEAPON, TAB_HP_ART, TAB_GENERAL = range(6)
 
     def add_hotkey_row(self, form: QFormLayout, name: str, slot=None, help_text: str | None = None,
                        label: QLabel | None = None) -> InputSettingWidget:
@@ -558,6 +560,63 @@ class SettingsWindow(QWidget):
         self.clear_hpbar_region_button = make_button("清除", self.clear_hpbar_region)
         form.addRow("当前区域", make_row(self.hpbar_region_label, self.clear_hpbar_region_button))
 
+    WEAPON_POSITIONS = {"词条下方": POSITION_BELOW, "词条右侧": POSITION_RIGHT}
+
+    def init_weapon_group(self):
+        # 武器信息：在游戏的武器信息面板上，把属性补正和词条的具体数值显示在对应文字旁边
+        self.weapon_group = QGroupBox("武器属性补正 / 词条数值")
+        form = make_form(self.weapon_group)
+
+        self.weapon_detect_enable_checkbox = QCheckBox("启用武器信息显示")
+        self.weapon_detect_enable_checkbox.stateChanged.connect(self.update_weapon_detect_enable)
+        form.addRow(make_row(self.weapon_detect_enable_checkbox,
+                             make_button("查看帮助", self.show_weapon_help)))
+
+        self.weapon_region = None
+        self.capture_weapon_region_input_widget = self.add_hotkey_row(
+            form, "框选武器信息区域", self.capture_weapon_region,
+            "在游戏里打开武器信息面板（能同时看到武器名和词条文字的画面）后按下快捷键，\n"
+            "框选整块面板中的文字区域；区域越小识别越快，但要包含所有想查看的词条")
+        self.weapon_region_label = QLabel()
+        self.clear_weapon_region_button = make_button("清除", self.clear_weapon_region)
+        form.addRow("当前区域", make_row(self.weapon_region_label, self.clear_weapon_region_button))
+
+        self.weapon_position_combobox = QComboBox()
+        for name in self.WEAPON_POSITIONS:
+            self.weapon_position_combobox.addItem(name)
+        self.weapon_position_combobox.currentTextChanged.connect(self.update_weapon_position)
+        form.addRow("显示位置", make_row(self.weapon_position_combobox, make_help_label(
+            "数值显示在对应词条的下方或右侧\n某一侧会压住其他文字或超出屏幕时，自动换到另一侧"), stretch=False))
+
+        self.weapon_font_scale_slider = QSlider(Qt.Orientation.Horizontal)
+        self.weapon_font_scale_slider.setRange(60, 200)
+        self.weapon_font_scale_slider.setValue(100)
+        self.weapon_font_scale_value_label = make_value_label()
+        self.weapon_font_scale_slider.valueChanged.connect(self.update_weapon_font_scale)
+        form.addRow("字号", make_row(self.weapon_font_scale_slider, self.weapon_font_scale_value_label, stretch=False))
+
+        self.toggle_weapon_overlay_input_widget = self.add_hotkey_row(
+            form, "显示/隐藏武器信息", self.updater.toggle_weapon_overlay_by_shortcut)
+
+        self.weapon_status_label = QLabel()
+        self.weapon_status_label.setWordWrap(True)
+        form.addRow(self.weapon_status_label)
+        form.addRow(make_tip_label(
+            "数据来自游戏参数解包。属性补正为武器未强化时的基础值；"
+            "词条数值目前只覆盖伤害、异常累积、消耗等有数据的词条，其余词条显示“暂无数值数据”。"))
+
+    def on_weapon_status(self, error_text: str):
+        self.weapon_ocr_error = error_text or None
+        self.refresh_weapon_status_label()
+        self.refresh_status()
+
+    def refresh_weapon_status_label(self):
+        if self.weapon_ocr_error:
+            self.weapon_status_label.setText(f"⚠️ 文字识别组件不可用：{self.weapon_ocr_error}")
+            self.weapon_status_label.setStyleSheet("color: #c0392b;")
+        else:
+            self.weapon_status_label.setText("")
+
     def init_art_timer_group(self):
         # 绝招计时器设置
         self.art_timer_group = QGroupBox("绝招倒计时")
@@ -634,7 +693,7 @@ class SettingsWindow(QWidget):
         grid.setContentsMargins(8, 6, 8, 6)
         grid.setHorizontalSpacing(16)
         self.status_labels: list[QLabel] = []
-        for i in range(6):
+        for i in range(7):
             label = QLabel()
             label.setTextFormat(Qt.TextFormat.RichText)
             label.linkActivated.connect(lambda link: self.tabs.setCurrentIndex(int(link)))
@@ -647,6 +706,7 @@ class SettingsWindow(QWidget):
             ("计时器", [self.appearance_group, self.input_group]),
             ("自动计时", [self.auto_timer_group, self.hp_color_group]),
             ("地图识别", [self.map_detect_group, self.map_region_group, self.map_hotkey_group]),
+            ("武器信息", [self.weapon_group]),
             ("血条 / 绝招", [self.hp_detect_group, self.art_timer_group]),
             ("通用", [self.performance_group, self.advanced_group, self.other_group]),
         ]
@@ -729,6 +789,9 @@ class SettingsWindow(QWidget):
                  self.hpcolor_detect_region is not None),
             item("地图识别", self.TAB_MAP, self.map_detect_enable_checkbox.isChecked(), True,
                  ok_text="手动区域" if self.map_region is not None else "自动区域"),
+            item("武器信息", self.TAB_WEAPON, self.weapon_detect_enable_checkbox.isChecked(),
+                 self.weapon_region is not None and not self.weapon_ocr_error,
+                 hint="未设置区域" if self.weapon_region is None else "识别组件不可用"),
             item("血条标记", self.TAB_HP_ART, self.hp_detect_enable_checkbox.isChecked(),
                  self.hpbar_region is not None),
             item("绝招倒计时", self.TAB_HP_ART, self.art_detect_enable_checkbox.isChecked(),
@@ -835,6 +898,17 @@ class SettingsWindow(QWidget):
             self.map_pattern_last_input_setting_widget.set_setting(InputSetting.load_from_dict(data.get("last_map_pattern_input_setting")))
             self.crystal_layout_next_input_setting_widget.set_setting(InputSetting.load_from_dict(data.get("next_crystal_layout_input_setting")))
             self.crystal_layout_last_input_setting_widget.set_setting(InputSetting.load_from_dict(data.get("last_crystal_layout_input_setting")))
+            # 武器信息
+            load_checkbox_state(self.weapon_detect_enable_checkbox, data.get("weapon_detect_enabled", False))
+            self.capture_weapon_region_input_widget.set_setting(InputSetting.load_from_dict(data.get("capture_weapon_region_input_setting")))
+            self.toggle_weapon_overlay_input_widget.set_setting(InputSetting.load_from_dict(data.get("toggle_weapon_overlay_input_setting")))
+            self.weapon_region = valid_region(data.get("weapon_region"))
+            self.update_weapon_region()
+            load_combobox_value(self.weapon_position_combobox, data.get("weapon_position", "词条下方"))
+            weapon_font_scale = data.get("weapon_font_scale", 100)
+            if isinstance(weapon_font_scale, bool) or not isinstance(weapon_font_scale, (int, float)):
+                weapon_font_scale = 100
+            load_slider_value(self.weapon_font_scale_slider, weapon_font_scale)
             # 血条比例标记
             load_checkbox_state(self.hp_detect_enable_checkbox, data.get("hp_detect_enabled", True))
             load_checkbox_state(self.hp_detect_keep_last_valid_checkbox, data.get("hp_detect_keep_last_valid", False))
@@ -917,6 +991,13 @@ class SettingsWindow(QWidget):
                 "last_map_pattern_input_setting": asdict(self.map_pattern_last_input_setting_widget.get_setting()),
                 "next_crystal_layout_input_setting": asdict(self.crystal_layout_next_input_setting_widget.get_setting()),
                 "last_crystal_layout_input_setting": asdict(self.crystal_layout_last_input_setting_widget.get_setting()),
+                # 武器信息
+                "weapon_detect_enabled": self.weapon_detect_enable_checkbox.isChecked(),
+                "capture_weapon_region_input_setting": asdict(self.capture_weapon_region_input_widget.get_setting()),
+                "toggle_weapon_overlay_input_setting": asdict(self.toggle_weapon_overlay_input_widget.get_setting()),
+                "weapon_region": self.weapon_region,
+                "weapon_position": self.weapon_position_combobox.currentText(),
+                "weapon_font_scale": self.weapon_font_scale_slider.value(),
                 # 血条比例标记
                 "hp_detect_enabled": self.hp_detect_enable_checkbox.isChecked(),
                 "hp_detect_keep_last_valid": self.hp_detect_keep_last_valid_checkbox.isChecked(),
@@ -946,6 +1027,7 @@ class SettingsWindow(QWidget):
         self.update_map_overlay_ui_state_signal.emit(MapOverlayUIState(
             is_setting_opened=True,
         ))
+        self.updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(is_setting_opened=True))
         self.updater.is_setting_opened = True
         # self.load_settings()
         super().showEvent(event)
@@ -959,6 +1041,7 @@ class SettingsWindow(QWidget):
         self.update_map_overlay_ui_state_signal.emit(MapOverlayUIState(
             is_setting_opened=False,
         ))
+        self.updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(is_setting_opened=False))
         self.updater.is_setting_opened = False
         self.save_settings()
         super().closeEvent(event)
@@ -988,6 +1071,8 @@ class SettingsWindow(QWidget):
 
         self._loading = False
         self.hotkey_widgets: list[tuple[str, InputSettingWidget]] = []
+        self.weapon_ocr_error: str | None = None
+        updater.weapon_status_signal.connect(self.on_weapon_status)
 
         self.init_appearance_group()
         self.init_input_group()
@@ -995,6 +1080,7 @@ class SettingsWindow(QWidget):
         self.init_auto_timer_group()
         self.init_hp_color_group()
         self.init_map_detect_group()
+        self.init_weapon_group()
         self.init_hp_detect_group()
         self.init_art_timer_group()
         self.init_advanced_group()
@@ -1533,8 +1619,85 @@ class SettingsWindow(QWidget):
         enabled = self.only_show_when_game_foreground_checkbox.isChecked()
         self.update_overlay_ui_state_signal.emit(OverlayUIState(only_show_when_game_foreground=enabled))
         self.update_map_overlay_ui_state_signal.emit(MapOverlayUIState(only_show_when_game_foreground=enabled))
+        self.updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(only_show_when_game_foreground=enabled))
         self.updater.only_detect_when_game_foreground = enabled
         info(f"Overlay only show when game foreground: {enabled}")
+
+    # =========================== Weapon Info =========================== #
+
+    def update_weapon_detect_enable(self, state):
+        self.updater.weapon_detect_enabled = self.weapon_detect_enable_checkbox.isChecked()
+        info(f"Weapon info enabled: {self.updater.weapon_detect_enabled}")
+        self.refresh_status()
+
+    def update_weapon_position(self, text: str):
+        position = self.WEAPON_POSITIONS.get(text)
+        if position is None:
+            return
+        self.updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(position=position))
+        info(f"Weapon info position: {position}")
+
+    def update_weapon_font_scale(self, value: int):
+        self.weapon_font_scale_value_label.setText(f"{value}%")
+        self.updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(font_scale=value / 100.0))
+
+    def capture_weapon_region(self):
+        COLOR_WEAPON_REGION = "#eb7a32"
+        SCREENSHOT_WINDOW_CONFIG = {
+            'annotation_buttons': [
+                {'pos': (0.5, 0.5), 'size': 32, 'color': COLOR_WEAPON_REGION, 'text': '点我并框出 武器信息面板 的区域'},
+            ],
+            'control_buttons': {
+                'cancel':   {'pos': (0.3, 0.5), 'size': 50, 'color': "#b3b3b3", 'text': '取消'},
+                'save':     {'pos': (0.3, 0.6), 'size': 50, 'color': "#ffffff", 'text': '保存'},
+            }
+        }
+        window = CaptureRegionWindow(SCREENSHOT_WINDOW_CONFIG, self.input)
+        region_result = window.capture_and_show()
+        if region_result is None:
+            warning("Weapon region setting canceled")
+            return
+        if screenshot := window.screenshot_at_saving:
+            screenshot.save(get_appdata_path("weapon_region_screenshot.jpg"))
+        for item in region_result:
+            if item['color'] == COLOR_WEAPON_REGION:
+                self.weapon_region = list(item['rect'])
+        self.update_weapon_region()
+        self.save_settings()
+
+    def update_weapon_region(self):
+        self.updater.weapon_region = self.weapon_region
+        info(f"Updated weapon region: weapon_region={self.weapon_region}")
+        set_region_label(self.weapon_region_label, self.weapon_region)
+        self.clear_weapon_region_button.setEnabled(self.weapon_region is not None)
+        self.refresh_status()
+
+    def clear_weapon_region(self):
+        self.weapon_region = None
+        self.update_weapon_region()
+        self.save_settings()
+
+    def show_weapon_help(self):
+        msg = QMessageBox(self)
+        msg.setMaximumWidth(460)
+        msg.setWindowTitle("武器属性补正 / 词条数值")
+        layout: QVBoxLayout = QVBoxLayout()
+        layout.addWidget(QLabel(
+            "该功能通过截屏文字识别（OCR）读取游戏里的武器名和词条名，\n"
+            "并把武器的属性补正、词条的具体加成数值显示在对应文字的旁边。"))
+        layout.addWidget(QLabel("1. 勾选“启用武器信息显示”，设置“框选武器信息区域”的快捷键"))
+        layout.addWidget(QLabel("2. 在游戏里打开武器信息面板（拾取/查看武器时能看到武器名和词条的画面），按下快捷键"))
+        layout.addWidget(QLabel("3. 框选整块面板的文字区域，保存。区域越小识别越快，但需要包含要查看的所有词条"))
+        layout.addWidget(QLabel("4. 之后每次出现该面板，数值会自动显示在词条旁边；可在“显示位置”中选择下方或右侧"))
+        layout.addWidget(QLabel(
+            "说明：\n"
+            "· 词条档位在游戏里看不出来时，会同时列出各档数值（如 +6%/+9%/+12%（档位1/2/3））\n"
+            "· 属性补正为武器未强化时的基础值，评级参照艾尔登法环的划分（S≥175 / A≥140 / B≥90 / C≥60 / D≥25 / E），\n  与游戏里显示的字母可能因武器强化等级不同而有出入\n"
+            "· 带“（条件触发）”的词条，数值只在满足条件时生效\n"
+            "· 识别约需 1 秒，画面变化后会先隐藏旧数值再显示新结果"))
+        msg.layout().addLayout(layout, 0, 0)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
 
     # =========================== HP Detect =========================== #
         

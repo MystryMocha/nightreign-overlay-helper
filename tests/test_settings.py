@@ -25,7 +25,7 @@ def make_window(qapp, monkeypatch):
         if settings_text is not None:
             with open(SETTINGS_SAVE_PATH, "w", encoding="utf-8") as f:
                 f.write(settings_text)
-        updater = updater_module.Updater(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+        updater = updater_module.Updater(MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock())
         window = SettingsWindow(OverlayWidget(), MapOverlayWidget(), updater, InputWorker())
         windows.append(window)
         return window, updater
@@ -137,3 +137,62 @@ def test_app_user_model_id_has_no_version(make_window, monkeypatch):
     monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
     make_window()
     assert seen == [APP_NAME]
+
+
+def test_weapon_info_defaults(make_window):
+    window, updater = make_window()
+    assert updater.weapon_detect_enabled is False and updater.weapon_region is None
+    assert window.weapon_position_combobox.currentText() == "词条下方"
+    assert window.weapon_font_scale_slider.value() == 100
+
+
+def test_weapon_info_settings_are_applied_and_saved(make_window):
+    window, updater = make_window(yaml.safe_dump({
+        "weapon_detect_enabled": True,
+        "weapon_region": [10, 20, 300, 200],
+        "weapon_position": "词条右侧",
+        "weapon_font_scale": 130,
+    }))
+    assert updater.weapon_detect_enabled is True
+    assert updater.weapon_region == [10, 20, 300, 200]
+    states = []
+    updater.weapon_overlay_ui_state_signal.connect(states.append)
+    window.weapon_position_combobox.setCurrentText("词条下方")
+    window.weapon_font_scale_slider.setValue(80)
+    assert [s.position for s in states if s.position] == ["below"]
+    assert [s.font_scale for s in states if s.font_scale] == [0.8]
+
+    window.save_settings()
+    with open(make_window.path, encoding="utf-8") as f:
+        saved = yaml.safe_load(f)
+    assert saved["weapon_detect_enabled"] is True
+    assert saved["weapon_region"] == [10, 20, 300, 200]
+    assert saved["weapon_position"] == "词条下方" and saved["weapon_font_scale"] == 80
+
+
+def test_invalid_weapon_settings_are_ignored(make_window):
+    window, updater = make_window(yaml.safe_dump({
+        "weapon_region": [1, 2, "a", 4], "weapon_font_scale": "huge", "weapon_position": "somewhere",
+        "hpbar_region": [1, 2, 3, 4],
+    }))
+    assert updater.weapon_region is None
+    assert window.weapon_font_scale_slider.value() == 100
+    assert window.weapon_position_combobox.currentText() == "词条下方"
+    assert updater.hpbar_region == [1, 2, 3, 4]         # 排在后面的设置不受影响
+    assert not os.path.exists(make_window.path + ".load_failed.bak")
+
+
+def test_clearing_weapon_region_updates_updater(make_window):
+    window, updater = make_window(yaml.safe_dump({"weapon_region": [10, 20, 300, 200]}))
+    window.clear_weapon_region()
+    assert updater.weapon_region is None and not window.clear_weapon_region_button.isEnabled()
+
+
+def test_weapon_ocr_error_is_reported_in_settings(make_window):
+    window, updater = make_window(yaml.safe_dump({"weapon_detect_enabled": True, "weapon_region": [1, 2, 3, 4]}))
+    updater.weapon_status_signal.emit("ImportError: boom")
+    assert "ImportError: boom" in window.weapon_status_label.text()
+    assert "识别组件不可用" in window.status_labels[4].text()
+    updater.weapon_status_signal.emit("")
+    assert window.weapon_status_label.text() == ""
+    assert "识别组件不可用" not in window.status_labels[4].text()

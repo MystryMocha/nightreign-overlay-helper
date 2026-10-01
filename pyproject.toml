@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "numpy>=2",
+    "onnxruntime>=1.20",
     "opencv-python>=5",
     "pillow>=12",
     "platformdirs>=4",
@@ -14,6 +15,7 @@ dependencies = [
     "pyqt6>=6",
     "pywin32>=312; sys_platform == 'win32'",
     "pyyaml>=6",
+    "rapidocr>=3",
 ]
 
 [dependency-groups]
