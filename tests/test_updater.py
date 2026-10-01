@@ -1,0 +1,178 @@
+import time
+from unittest.mock import MagicMock
+
+import pytest
+
+import src.updater as updater_module
+from src.screencap import EngineStatus, ScreencapInitError, ScreencapRuntimeError
+from src.ui.overlay import OverlayUIState
+from src.updater import Phase, Updater
+
+
+class FakeInput:
+    def __init__(self):
+        self.blocked = []
+
+    def set_signals_blocked(self, blocked):
+        self.blocked.append(blocked)
+
+
+class FakeEngine:
+    def __init__(self, init_error=None):
+        self.status = EngineStatus.UNINITIALIZED
+        self.init_error = init_error
+        self.init_calls = 0
+
+    def check_reconnect_reason(self):
+        return None
+
+    def initialize(self, mode):
+        self.init_calls += 1
+        if self.init_error is not None:
+            self.status = EngineStatus.FAILED
+            raise self.init_error
+        self.status = EngineStatus.CONNECTED
+
+    def shutdown(self):
+        self.status = EngineStatus.SHUTDOWN
+
+
+@pytest.fixture
+def make_updater(qapp, monkeypatch):
+    monkeypatch.setattr(updater_module, "DetectorManager", lambda engine: MagicMock())
+    monkeypatch.setattr(updater_module, "is_window_in_foreground", lambda *a, **k: False)
+
+    def make(engine):
+        monkeypatch.setattr(updater_module, "get_engine", lambda: engine)
+        fake_input = FakeInput()
+        updater = Updater(fake_input, MagicMock(), MagicMock(), MagicMock())
+        updater.fake_input = fake_input
+        updater.overlay_states = []
+        updater.update_overlay_ui_state_signal.connect(updater.overlay_states.append)
+        return updater
+    return make
+
+
+def test_progress_text_with_partial_state_does_not_raise(make_updater):
+    updater = make_updater(FakeEngine())
+    assert updater.get_phase_progress_text() == (0.0, None)
+    # 模拟快捷键线程已经设置了 day，但阶段信息还没写完
+    updater.day = 1
+    assert updater.get_phase_progress_text() == (0.0, None)
+    updater.current_phase = Phase.FIRST_CIRCLE_STABLE
+    assert updater.get_phase_progress_text() == (0.0, None)
+
+
+def test_start_day1_sets_day_last(make_updater):
+    updater = make_updater(FakeEngine())
+    seen = []
+    original_get_time = updater.get_time
+
+    def spy():
+        seen.append(updater.day)         # 计算开始时间时 day 还不能被设置
+        return original_get_time()
+    updater.get_time = spy
+    updater.start_day1()
+    assert seen and all(day is None for day in seen)
+    progress, text = updater.get_phase_progress_text()
+    assert text.startswith("DAY I - ")
+
+
+def test_timer_ui_keeps_updating_when_screencap_init_fails(make_updater):
+    engine = FakeEngine(init_error=ScreencapInitError("connect_failed", "no game"))
+    updater = make_updater(engine)
+    updater.start_day1()
+    updater.update_overlay_ui_state_signal.disconnect(updater.overlay_states.append)
+    states: list[OverlayUIState] = []
+    updater.update_overlay_ui_state_signal.connect(states.append)
+    updater.run_once()
+    assert engine.init_calls == 1
+    assert any(s.day_text and s.day_text.startswith("DAY I") for s in states)
+
+
+def test_run_survives_exceptions_in_an_iteration(make_updater, monkeypatch):
+    updater = make_updater(FakeEngine())
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("boom")
+        updater.stop()
+    monkeypatch.setattr(updater, "run_once", flaky)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    updater.run()
+    assert len(calls) == 3
+
+
+def test_capture_error_in_one_detector_does_not_stop_others(make_updater):
+    updater = make_updater(FakeEngine())
+    order = []
+
+    def failing():
+        order.append("dayx")
+        raise ScreencapRuntimeError("grab_failed", "region outside frame")
+
+    updater.detect_and_update_dayx = failing
+    updater.detect_and_update_in_rain = lambda: order.append("rain")
+    updater.detect_and_update_map = lambda: order.append("map")
+    updater.detect_and_update_hp = lambda: order.append("hp")
+    updater.detect_and_update_art = lambda: order.append("art")
+    updater.detect_and_update_all()
+    assert order == ["dayx", "rain", "map", "hp", "art"]
+
+
+def test_repeated_failures_are_logged_at_most_once_per_interval(make_updater):
+    updater = make_updater(FakeEngine())
+    messages = []
+    for _ in range(50):
+        updater._log_throttled(messages.append, "k", "same failure", interval=60)
+    assert messages == ["same failure"]
+
+
+def test_foreground_check_blocks_input_directly(make_updater):
+    updater = make_updater(FakeEngine())
+    updater.only_detect_when_game_foreground = True
+    updater.check_game_foreground()           # 游戏不在前台
+    updater.is_menu_opened = True
+    updater.check_game_foreground()           # 右键菜单打开时不阻止，菜单需要用到按键
+    updater.only_detect_when_game_foreground = False
+    updater.is_menu_opened = False
+    updater.check_game_foreground()
+    assert updater.fake_input.blocked == [True, False, False]
+
+
+def test_hp_overlay_receives_foreground_only_option(make_updater):
+    updater = make_updater(FakeEngine())
+    states = []
+    updater.hp_overlay_ui_state_signal.connect(states.append)
+    updater.only_detect_when_game_foreground = True
+    updater.check_game_foreground()
+    assert states[-1].only_show_when_game_foreground is True
+    assert states[-1].is_game_foreground is False
+
+
+def test_map_pattern_failure_restores_overlay_and_schedules_retry(make_updater):
+    updater = make_updater(FakeEngine())
+    updater.manual_map_region = [0, 0, 100, 100]
+    detect_results = iter([
+        # 1) 全图检测
+        MagicMock(map_detect_result=MagicMock(is_full_map=True, img=object())),
+        # 2) 地形识别
+        MagicMock(map_detect_result=MagicMock(earth_shifting=0)),
+    ])
+
+    def fake_detect(param):
+        try:
+            return next(detect_results)
+        except StopIteration:
+            raise RuntimeError("matching exploded")
+    updater.detector.detect = fake_detect
+    updater.do_match_map_pattern_flag = updater_module.DoMatchMapPatternFlag.TRUE
+    updater.last_map_pattern_match_time = updater.get_time()
+    updater.crystal_auto_detect_enabled = False
+    map_states = []
+    updater.update_map_overlay_ui_state_signal.connect(map_states.append)
+    updater.detect_and_update_map()
+    assert updater.map_pattern_retry_on_next_open is True
+    assert map_states[-1].map_pattern_matching is False     # 不能停在"正在识别中"

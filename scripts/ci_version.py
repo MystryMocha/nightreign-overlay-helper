@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import sys
 from pathlib import Path
 
 
@@ -178,7 +179,7 @@ def main() -> int:
         if current != pep440_version:
             print(
                 f"pyproject.toml version mismatch: current={current!r}, expected={pep440_version!r}",
-                file=os.sys.stderr,
+                file=sys.stderr,
             )
             return 2
 

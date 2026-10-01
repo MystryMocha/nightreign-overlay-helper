@@ -15,7 +15,7 @@ Nightreign Overlay Helper is a utility program developed with PyQt6, designed to
 ## Build Instructions
 
 #### Prerequisites
-- Windows 7, 8, 10, or 11
+- Windows 10 or 11 (required by Python 3.13 and Qt 6)
 - Python 3.13
 
 #### Steps
@@ -30,6 +30,14 @@ Nightreign Overlay Helper is a utility program developed with PyQt6, designed to
 
     You can find the built executable in the `dist/nightreign-overlay-helper` directory.
 
+
+## Development
+
+```bash
+uv sync                    # installs runtime and dev dependencies (Windows)
+uv run ruff check src scripts tests
+uv run pytest
+```
 
 ## Usage
 Double-click `nightreign-overlay-helper.exe` to run the program. Right-click the overlay window or the taskbar icon to open the menu and access the settings window. Refer to the help in the settings UI for configuration guidance.
@@ -65,7 +73,7 @@ The program recognizes game information by capturing screenshots of the game scr
 
 #### 环境要求
 
-- Windows 7、8、10 或 11
+- Windows 10 或 11（Python 3.13 与 Qt 6 的要求）
 - Python 3.13
 
 #### 构建步骤
@@ -80,6 +88,14 @@ The program recognizes game information by capturing screenshots of the game scr
 
     构建完成的可执行文件位于 `dist/nightreign-overlay-helper` 目录下。
 
+
+## 开发
+
+```bash
+uv sync                    # 安装运行和开发依赖（Windows）
+uv run ruff check src scripts tests
+uv run pytest
+```
 
 ## 使用方法
 

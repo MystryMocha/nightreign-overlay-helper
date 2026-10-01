@@ -34,8 +34,10 @@ jobs:
       - name: Verify project version matches tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}   # 通过环境变量传入，避免把 tag 名直接拼进脚本（tag 名可以包含 $() 等字符）
         run: |
-          uv run python scripts/ci_version.py --tag "${{ github.ref_name }}" --file pyproject.toml --check --set-github-env
+          uv run python scripts/ci_version.py --tag "$env:REF_NAME" --file pyproject.toml --check --set-github-env
         
       - name: Build with PyInstaller
         run: uv run pyinstaller --name "nightreign-overlay-helper" --windowed --onefile --distpath "dist\nightreign-overlay-helper" --icon="assets\icon.ico" --add-data "pyproject.toml;." --add-binary "native\MaaWin32Screencap.dll;native" src\app.py
@@ -72,9 +74,11 @@ jobs:
       - name: Package for Release
         if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
         shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           # 从 github.ref_name 获取标签名，例如 "v1.0.0"
-          $version = "${{ github.ref_name }}"
+          $version = $env:REF_NAME
           # 构造 zip 文件名，例如 "nightreign-overlay-helper-v1.0.0.zip"
           $zipName = "nightreign-overlay-helper-$version.zip"
           # 使用 PowerShell 的 Compress-Archive 命令创建 zip 文件
