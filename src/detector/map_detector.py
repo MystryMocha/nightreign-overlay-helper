@@ -563,7 +563,7 @@ class MapDetector:
             possible_ctypes.update(self.info.possible_poi_types.get((earth_shifting, nl, pos), set()))
 
         # print("pos:", pos, "possible ctypes:", possible_ctypes)
-        for poi_key in self.poi_cate_info:
+        for poi_key, cate_info in self.poi_cate_info.items():
             if not any(match_prefix(ctype, poi_key) for ctype in possible_ctypes):
                 continue    # 仅匹配该位置可能出现的POI类型
             
@@ -572,7 +572,7 @@ class MapDetector:
                 for dy in range(-MAX_OFFSET, MAX_OFFSET+1, OFFSET_STRIDE):
                     for s in np.linspace(SCALE_RANGE[0], SCALE_RANGE[1], SCALE_RANGE[2], endpoint=True):
                         size = (int(STD_POI_SIZE[0] * s), int(STD_POI_SIZE[1] * s))
-                        resized_poi_icon = info.get_resized_image(size)
+                        resized_poi_icon = cate_info.get_resized_image(size)
                         poi_img = bg.copy()
                         poi_img.alpha_composite(resized_poi_icon, (dx, dy))
                         poi_img = np.array(poi_img)[..., :3]
