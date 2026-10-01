@@ -140,8 +140,14 @@ def _apply_processing(img: Image.Image, processing: str, region) -> Image.Image:
     return img
 
 
-def _resolve_region_origin(region: tuple[int, int, int, int]) -> tuple[int, int]:
-    """区域左上角在截图画面中的位置（区域坐标位于任一屏幕内时即为其本身，否则按主屏幕偏移换算）"""
+def _resolve_region_origin(region: tuple[int, int, int, int], frame_size: tuple[int, int] | None = None) -> tuple[int, int]:
+    """
+    区域左上角在截图画面中的位置。
+
+    区域是用户在桌面截图上框选的，坐标为桌面坐标。游戏（无边框）全屏时，截图画面就是游戏所在的那块屏幕，
+    此时需要减去该屏幕的左上角偏移；否则（窗口化等，画面尺寸与屏幕不一致）无法确定窗口在桌面上的位置，
+    保持原有行为，直接把区域坐标当作画面坐标。
+    """
     x, y = region[0], region[1]
     monitors = get_monitors()
     if not monitors:
@@ -150,6 +156,8 @@ def _resolve_region_origin(region: tuple[int, int, int, int]) -> tuple[int, int]
     for monitor in monitors[1:]:
         if (monitor["left"] <= x < monitor["left"] + monitor["width"] and
                 monitor["top"] <= y < monitor["top"] + monitor["height"]):
+            if frame_size is not None and frame_size == (monitor["width"], monitor["height"]):
+                return x - monitor["left"], y - monitor["top"]
             return x, y
 
     main_screen = monitors[1]
@@ -183,9 +191,9 @@ def grab_region(engine: ScreencapEngine, region: tuple[int, int, int, int], proc
         raise ValueError(f"Invalid region size: w={w}, h={h}")
 
     full_img = engine.grab_fullscreen()
-    x0, y0 = _resolve_region_origin(region)
-    x0, y0 = int(x0), int(y0)
     frame_w, frame_h = full_img.size
+    x0, y0 = _resolve_region_origin(region, (frame_w, frame_h))
+    x0, y0 = int(x0), int(y0)
     if x0 < 0 or y0 < 0 or x0 + w > frame_w or y0 + h > frame_h:
         raise ScreencapRuntimeError(
             "grab_failed",

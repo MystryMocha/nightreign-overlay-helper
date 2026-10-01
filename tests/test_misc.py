@@ -141,3 +141,119 @@ def test_tag_to_pep440_rejects_bad_tags(tag):
     module = _load_ci_version()
     with pytest.raises(module.VersionError):
         module.tag_to_pep440(tag)
+
+
+# ---------------------------------------------------------------- 副屏全屏：桌面坐标 → 画面坐标
+
+def _monitors(*screens):
+    """get_monitors 的返回格式：第 0 项是所有屏幕的汇总，其后是各屏幕"""
+    return [{"left": 0, "top": 0, "width": 0, "height": 0}] + [
+        {"left": l, "top": t, "width": w, "height": h} for l, t, w, h in screens
+    ]
+
+
+@pytest.mark.parametrize("screens, region, frame, expected", [
+    # 主屏全屏：偏移为 0，区域坐标即画面坐标
+    ([(0, 0, 200, 100), (200, 0, 200, 100)], (10, 5, 30, 4), (200, 100), (10, 5)),
+    # 游戏全屏在右侧副屏：画面是副屏的内容，要减去副屏偏移
+    ([(0, 0, 200, 100), (200, 0, 200, 100)], (250, 5, 30, 4), (200, 100), (50, 5)),
+    # 游戏全屏在左侧副屏（坐标为负）
+    ([(0, 0, 200, 100), (-200, 0, 200, 100)], (-150, 5, 30, 4), (200, 100), (50, 5)),
+    # 窗口化：画面尺寸与屏幕不一致，无法得知窗口位置，保持原有行为
+    ([(0, 0, 200, 100), (200, 0, 200, 100)], (250, 5, 30, 4), (180, 90), (250, 5)),
+])
+def test_region_origin_on_fullscreen_monitor(monkeypatch, screens, region, frame, expected):
+    import src.detector.utils as utils
+    monkeypatch.setattr(utils, "get_monitors", lambda: _monitors(*screens))
+    assert utils._resolve_region_origin(region, frame) == expected
+
+
+def test_grab_region_fullscreen_on_secondary_monitor(monkeypatch):
+    import src.detector.utils as utils
+    monkeypatch.setattr(utils, "get_monitors", lambda: _monitors((0, 0, 200, 100), (200, 0, 200, 100)))
+    img = utils.grab_region(FrameEngine((200, 100)), (210, 5, 30, 4))
+    assert img.size == (30, 4)
+    assert img.getpixel((0, 0)) == (10, 1, 2)  # 画面里 x=10 的像素
+
+
+# ---------------------------------------------------------------- 预设名称
+
+@pytest.mark.parametrize("name", ["我的预设", "preset 1", "a.b", "CONSOLE", "COM10", "x" * 200])
+def test_preset_name_valid(name):
+    from src.ui.settings import is_valid_preset_name
+    assert is_valid_preset_name(name)
+
+
+@pytest.mark.parametrize("name", [
+    "", "   ", "a/b", "a\\b", "a:b", "a*b", 'a"b', "a|b", "a\tb", "x" * 201,
+    "CON", "con", "NUL", "Aux", "PRN", "COM1", "LPT9", "com3.backup", "CON .x",
+    "name.", "name ", "...",
+])
+def test_preset_name_invalid(name):
+    from src.ui.settings import is_valid_preset_name
+    assert not is_valid_preset_name(name)
+
+
+# ---------------------------------------------------------------- 悬浮窗水平居中（副屏）
+
+def test_overlay_set_x_to_center_uses_screen_offset(qapp, monkeypatch):
+    from types import SimpleNamespace
+
+    from PyQt6.QtCore import QRect
+
+    from src.ui.overlay import OverlayUIState, OverlayWidget
+
+    overlay = OverlayWidget()
+    secondary = SimpleNamespace(geometry=lambda: QRect(1920, 0, 1000, 600))
+    monkeypatch.setattr(overlay, "screen", lambda: secondary)
+    overlay.move(2000, 40)
+    overlay.update_ui_state(OverlayUIState(set_x_to_center=True))
+    assert overlay.x() == 1920 + (1000 - overlay.width()) // 2
+    assert overlay.y() == 40
+
+
+# ---------------------------------------------------------------- native 二进制校验
+
+def _load_verify_native():
+    spec = importlib.util.spec_from_file_location(
+        "verify_native", Path(__file__).parent.parent / "scripts" / "verify_native.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_repo_native_binaries_match_manifest():
+    vn = _load_verify_native()
+    assert vn.verify(vn.NATIVE_DIR) == []
+
+
+def test_verify_native_detects_tampering(tmp_path):
+    vn = _load_verify_native()
+    (tmp_path / "a.dll").write_bytes(b"original")
+    assert vn.main(["--dir", str(tmp_path), "--update"]) == 0
+    assert vn.verify(tmp_path) == []
+
+    (tmp_path / "a.dll").write_bytes(b"tampered")
+    assert any("mismatch" in p for p in vn.verify(tmp_path))
+
+    (tmp_path / "a.dll").write_bytes(b"original")
+    (tmp_path / "b.dll").write_bytes(b"new, unlisted")
+    assert any("b.dll" in p and "not listed" in p for p in vn.verify(tmp_path))
+
+    (tmp_path / "b.dll").unlink()
+    (tmp_path / "a.dll").unlink()
+    assert any("missing" in p for p in vn.verify(tmp_path))
+
+
+def test_verify_native_requires_manifest(tmp_path):
+    vn = _load_verify_native()
+    (tmp_path / "a.dll").write_bytes(b"x")
+    assert vn.main(["--dir", str(tmp_path)]) == 1
+
+
+def test_verify_native_accepts_crlf_manifest(tmp_path):
+    vn = _load_verify_native()
+    (tmp_path / "a.dll").write_bytes(b"x")
+    digest = vn.sha256_of(tmp_path / "a.dll")
+    (tmp_path / "SHA256SUMS").write_bytes(f"{digest}  a.dll\r\n".encode())
+    assert vn.verify(tmp_path) == []

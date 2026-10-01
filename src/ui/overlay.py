@@ -222,9 +222,10 @@ class OverlayWidget(QWidget):
                 warning(f"Overlay position ({state.x}, {state.y}) is off-screen, moving to top center.")
                 state.set_to_top_center = True
         if state.set_x_to_center:
-            screen = QApplication.primaryScreen()
+            # 在悬浮窗当前所在的屏幕上居中（副屏的 x 坐标不是从 0 开始）
+            screen = self.screen() or QApplication.primaryScreen()
             screen_geometry = screen.geometry()
-            new_x = (screen_geometry.width() - self.width()) // 2
+            new_x = screen_geometry.x() + (screen_geometry.width() - self.width()) // 2
             self.move(new_x, self.y())
         if state.set_to_top_center:
             screen_geometry = QApplication.primaryScreen().geometry()

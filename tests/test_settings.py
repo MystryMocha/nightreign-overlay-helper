@@ -123,3 +123,17 @@ def test_topk_handler_ignores_empty_text(make_window):
     updater.map_pattern_return_topk = 5
     window.update_map_pattern_return_topk("")
     assert updater.map_pattern_return_topk == 5
+
+
+def test_app_user_model_id_has_no_version(make_window, monkeypatch):
+    """带版本号的 AppUserModelID 会让已固定到任务栏的快捷方式在升级后分裂成两个图标"""
+    import ctypes
+    from types import SimpleNamespace
+
+    from src.common import APP_NAME
+
+    seen = []
+    fake_windll = SimpleNamespace(shell32=SimpleNamespace(SetCurrentProcessExplicitAppUserModelID=seen.append))
+    monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
+    make_window()
+    assert seen == [APP_NAME]
