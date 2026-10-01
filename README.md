@@ -34,10 +34,13 @@ Nightreign Overlay Helper is a utility program developed with PyQt6, designed to
 ## Development
 
 ```bash
-uv sync                    # installs runtime and dev dependencies (Windows)
+uv sync --locked           # installs runtime, dev and build (PyInstaller) dependencies from uv.lock (Windows)
 uv run ruff check src scripts tests
 uv run pytest
+uv run python scripts/verify_native.py   # checks native/*.dll against native/SHA256SUMS
 ```
+
+`uv.lock` is committed and CI installs with `--locked`: after changing dependencies in `pyproject.toml`, run `uv lock` and commit the result. When replacing the prebuilt DLL in `native/`, follow [native/README.md](native/README.md).
 
 ## Usage
 Double-click `nightreign-overlay-helper.exe` to run the program. Right-click the overlay window or the taskbar icon to open the menu and access the settings window. Refer to the help in the settings UI for configuration guidance.
@@ -50,6 +53,7 @@ The program recognizes game information by capturing screenshots of the game scr
 ## Acknowledgements
 
 - All image resources used in this program are copyrighted by their respective owners.
+- The bundled font Source Han Sans SC is © Adobe and licensed under the SIL Open Font License 1.1; see `data/fonts/OFL.txt`.
 - Thanks to [Fuwish](https://github.com/Fuwishx) for map data support.
 - Thanks to [雀煊](https://space.bilibili.com/391379672) for sharing the Great Hollow crystal layout.
 
@@ -92,10 +96,13 @@ The program recognizes game information by capturing screenshots of the game scr
 ## 开发
 
 ```bash
-uv sync                    # 安装运行和开发依赖（Windows）
+uv sync --locked           # 按 uv.lock 安装运行、开发和打包（PyInstaller）依赖（Windows）
 uv run ruff check src scripts tests
 uv run pytest
+uv run python scripts/verify_native.py   # 校验 native/*.dll 与 native/SHA256SUMS 是否一致
 ```
+
+`uv.lock` 已提交，CI 使用 `--locked` 安装：修改 `pyproject.toml` 里的依赖后请运行 `uv lock` 并一并提交。更换 `native/` 下的预编译 DLL 请按 [native/README.md](native/README.md) 操作。
 
 ## 使用方法
 
@@ -110,5 +117,6 @@ uv run pytest
 ## 声明
 
 - 本程序使用的图片资源所有版权归其合法所有者所有。
+- 本程序随附的字体 Source Han Sans SC（思源黑体）© Adobe，依据 SIL Open Font License 1.1 授权，许可全文见 `data/fonts/OFL.txt`。
 - 感谢来自 [Fuwish](https://github.com/Fuwishx) 的地图解包数据支持。
 - 感谢来自 [雀煊](https://space.bilibili.com/391379672) 的大空洞水晶布局分享。

@@ -16,20 +16,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Verify native DLL
-        shell: pwsh
-        run: |
-          if (-not (Test-Path "native/MaaWin32Screencap.dll" -PathType Leaf)) {
-            Write-Error "native/MaaWin32Screencap.dll not found. Ensure the DLL is committed to the repository."
-            exit 1
-          }
-          Write-Host "native/MaaWin32Screencap.dll verified."
-
       - name: Setup uv
         uses: astral-sh/setup-uv@v10.0.1
         
       - name: Install dependency
-        run: uv sync
+        run: uv sync --locked
+
+      - name: Verify native DLL
+        run: uv run python scripts/verify_native.py
 
       - name: Verify project version matches tag
         if: startsWith(github.ref, 'refs/tags/v')

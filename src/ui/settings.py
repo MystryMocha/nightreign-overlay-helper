@@ -14,7 +14,7 @@ import re
 
 from src.updater import Updater
 from src.common import (
-    APP_FULLNAME, APP_NAME, APP_VERSION,
+    APP_FULLNAME, APP_NAME,
     get_appdata_path, get_asset_path, get_desktop_path,
     ICON_PATH, load_yaml, save_yaml,
 )
@@ -166,6 +166,32 @@ ADVANCED_PARAMS = [
 ]
 
 
+# Windows 保留的设备名：即使带扩展名（如 CON.yaml）也无法作为普通文件创建
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def is_valid_preset_name(name: str) -> bool:
+    """预设名会直接用作文件名，需同时满足 Windows 和 Linux 的文件名规则"""
+    if not name or name.strip() == "":
+        return False
+    # 禁止包含 / \ : * ? " < > | 以及控制字符
+    if re.search(r'[\\/:*?"<>|\x00-\x1f]', name):
+        return False
+    # 限制长度
+    if len(name) > 200:
+        return False
+    # Windows 会静默去掉文件名末尾的点和空格，导致保存的文件名与列表里显示的不一致
+    if name != name.rstrip(" ."):
+        return False
+    if name.split(".", 1)[0].rstrip(" ").upper() in _WINDOWS_RESERVED_NAMES:
+        return False
+    return True
+
+
 class PresetDialog(QWidget):
     save_preset_signal = pyqtSignal(str)
     load_preset_signal = pyqtSignal(str)
@@ -243,17 +269,7 @@ class PresetDialog(QWidget):
             self.list_layout.addWidget(item_widget)
 
     def _is_valid_filename(self, filename: str) -> bool:
-        """检查是否是合适的文件名 (Windows/Linux 通用规则)"""
-        if not filename or filename.strip() == "":
-            return False
-        # 禁止包含 / \ : * ? " < > |
-        invalid_chars = r'[\\/:*?"<>|]'
-        if re.search(invalid_chars, filename):
-            return False
-        # 限制长度
-        if len(filename) > 200:
-            return False
-        return True
+        return is_valid_preset_name(filename)
 
     def _on_save_clicked(self):
         """保存按钮点击逻辑"""
@@ -262,7 +278,7 @@ class PresetDialog(QWidget):
             self.save_preset_signal.emit(name)
             self.name_input.clear()  # 发送后清空输入框
         else:
-            warning_box("无效的预设名称！请避免使用特殊字符 / \\ : * ? \" < > | 并确保名称非空且不过长。", self)
+            warning_box("无效的预设名称！请避免使用特殊字符 / \\ : * ? \" < > |，不要以空格或点结尾，也不要使用 CON、NUL、COM1 等系统保留名，并确保名称非空且不过长。", self)
 
 
 class SettingsWindow(QWidget):
@@ -960,7 +976,8 @@ class SettingsWindow(QWidget):
 
         self.setWindowIcon(QIcon(ICON_PATH))
         try:
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(f'{APP_NAME}.{APP_VERSION}')
+            # 不带版本号：AppUserModelID 变化后，已固定到任务栏的快捷方式会和新版本程序分成两个图标
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_NAME)
         except Exception as e:
             warning(f"Failed to set AppUserModelID: {e}")
 
@@ -1035,6 +1052,10 @@ class SettingsWindow(QWidget):
         self.update_preset_list()
         
     def save_preset(self, preset_name: str):
+        if not is_valid_preset_name(preset_name):
+            warning(f"Invalid preset name: {preset_name!r}")
+            error_box(f"无效的预设名称：{preset_name}", self.preset_dialog)
+            return
         preset_path = os.path.join(PRESET_SETTINGS_DIR, f"{preset_name}.yaml")
         if os.path.exists(preset_path):
             if not comfirm_box(f"预设设置 \"{preset_name}\"已存在，是否覆盖？", self.preset_dialog):

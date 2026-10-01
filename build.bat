@@ -7,15 +7,18 @@ set "current_dir=%cd%"
 where uv >nul 2>nul
 if %errorlevel% equ 0 goto run_main
 
-:: 安装 uv
-echo 未检测到 uv，正在安装...
-powershell -ExecutionPolicy Bypass -Command "irm https://gitee.com/wangnov/uv-custom/releases/download/latest/uv-installer-custom.ps1     | iex"
+:: 安装 uv：使用官方安装脚本并固定版本（脚本内置了安装包的校验和）
+:: 如果访问 astral.sh / GitHub 太慢，也可以自行安装 uv 后重新运行：
+::   winget install --id=astral-sh.uv -e      或      pip install uv
+set "UV_VERSION=0.8.17"
+echo 未检测到 uv，正在安装官方 uv %UV_VERSION% ...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/%UV_VERSION%/install.ps1 | iex"
 
 call :refresh_path
 :: 验证 uv 是否可用
 where uv >nul 2>nul
 if %errorlevel% neq 0 (
-    echo 安装 uv 后仍未找到，请检查安装路径
+    echo 安装 uv 后仍未找到，请检查网络或手动安装 uv（winget install --id=astral-sh.uv -e）
     pause
     exit /b 1
 )
@@ -24,8 +27,26 @@ if %errorlevel% neq 0 (
 :run_main
 cd /d "%current_dir%"
 
-uv sync
+uv sync --locked
+if errorlevel 1 (
+    echo 依赖安装失败：uv.lock 与 pyproject.toml 不一致或网络异常，请先运行 uv lock
+    pause
+    exit /b 1
+)
+
+uv run python scripts\verify_native.py
+if errorlevel 1 (
+    echo native 目录下的二进制校验失败，已中止构建
+    pause
+    exit /b 1
+)
+
 uv run pyinstaller --name "nightreign-overlay-helper" --windowed --onefile --distpath "dist\nightreign-overlay-helper" --icon="assets\icon.ico" --add-data "pyproject.toml;." --add-binary "native\MaaWin32Screencap.dll;native" src\app.py
+if errorlevel 1 (
+    echo PyInstaller 打包失败
+    pause
+    exit /b 1
+)
 
 xcopy /E /I /Y "assets" "dist\nightreign-overlay-helper\assets"
 xcopy /E /I /Y "data" "dist\nightreign-overlay-helper\data"
