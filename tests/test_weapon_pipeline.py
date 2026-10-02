@@ -58,6 +58,79 @@ class TestBuildAnnotations:
         assert len(anns) == 2
 
 
+def make_action_info() -> WeaponInfo:
+    return WeaponInfo({
+        "weapons": {
+            "火焰匕首": {"type": "短剑", "rarity": "普通", "correct": [13, 73, 0, 0, 0], "id": 1000000},
+            "隐士的手杖": {"type": "辉石魔杖", "rarity": "普通", "correct": [0, 0, 100, 0, 0],
+                           "id": 33750000, "caster": True},
+        },
+        "skills": {
+            "辉石魔砾": {"id": 203, "text": "魔力 137+基础", "byWeapon": {"1000000": "魔力 99+基础"}},
+            "神圣刀刃": {"id": 201, "text": "圣 180+基础 / 65%", "byWeapon": {}},
+            "无数值战技": {"id": 5, "text": None, "byWeapon": {}},
+        },
+        "spells": {"辉石魔砾": {"id": 4000, "text": "FP 7 · 魔力 152"}},
+        "affixes": {"提升魔力属性攻击力": [{"tier": 2, "text": "魔力伤害 +9%"}]},
+    })
+
+
+def action_texts(lines, **kwargs):
+    anns, _ = build_annotations(lines, make_action_info(), origin=(0, 0), **kwargs)
+    return [(a.kind, a.name, a.text, a.dim) for a in anns if a.kind != "weapon"]
+
+
+class TestActionAnnotations:
+    def test_skill_and_spell_summaries(self):
+        lines = [line("火焰匕首", 10, 10), line("战技：神圣刀刃", 10, 60), line("无数值战技", 10, 100)]
+        assert action_texts(lines) == [
+            ("skill", "神圣刀刃", "圣 180+基础 / 65%", False),
+            ("skill", "无数值战技", NO_DATA_TEXT, True),
+        ]
+
+    def test_same_name_uses_prefix(self):
+        lines = [line("火焰匕首", 10, 10), line("魔法：辉石魔砾", 10, 60)]
+        assert action_texts(lines) == [("spell", "辉石魔砾", "FP 7 · 魔力 152", False)]
+        lines = [line("隐士的手杖", 10, 10), line("战技：辉石魔砾", 10, 60)]
+        assert action_texts(lines) == [("skill", "辉石魔砾", "魔力 137+基础", False)]
+
+    def test_same_name_without_prefix_follows_the_weapon_above(self):
+        # 辉石魔砾在法杖上是法术，在剑上是战技；剑上的战技还按武器 id 取该武器的动作
+        assert action_texts([line("隐士的手杖", 10, 10), line("辉石魔砾", 10, 60)]) == [
+            ("spell", "辉石魔砾", "FP 7 · 魔力 152", False)]
+        assert action_texts([line("火焰匕首", 10, 10), line("辉石魔砾", 10, 60)]) == [
+            ("skill", "辉石魔砾", "魔力 99+基础", False)]
+
+    def test_same_name_without_weapon_shows_both(self):
+        assert action_texts([line("辉石魔砾", 10, 60)]) == [
+            ("mixed", "辉石魔砾", "战技：魔力 137+基础 · 法术：FP 7 · 魔力 152", False)]
+
+    def test_picks_the_nearest_weapon_above(self):
+        lines = [line("隐士的手杖", 10, 10), line("辉石魔砾", 10, 60), line("火焰匕首", 10, 200), line("辉石魔砾", 10, 250)]
+        assert action_texts(lines) == [
+            ("spell", "辉石魔砾", "FP 7 · 魔力 152", False),
+            ("skill", "辉石魔砾", "魔力 99+基础", False),
+        ]
+
+    def test_picks_the_weapon_in_the_same_column(self):
+        # 对比面板：左列法杖、右列匕首，各自下面的行归各自的武器
+        lines = [line("隐士的手杖", 10, 10), line("火焰匕首", 900, 10),
+                 line("辉石魔砾", 10, 60), line("辉石魔砾", 900, 60)]
+        assert action_texts(lines) == [
+            ("spell", "辉石魔砾", "FP 7 · 魔力 152", False),
+            ("skill", "辉石魔砾", "魔力 99+基础", False),
+        ]
+
+    def test_annotations_stay_in_reading_order(self):
+        # 战技 / 法术在武器之后才处理，但返回时仍按从上到下排列，布局才会先放上面的标注
+        lines = [line("火焰匕首", 10, 10), line("神圣刀刃", 10, 60), line("提升魔力属性攻击力", 10, 100)]
+        anns, _ = build_annotations(lines, make_action_info(), origin=(0, 0))
+        assert [a.kind for a in anns] == ["weapon", "skill", "affix"]
+
+    def test_action_names_are_not_matched_from_long_sentences(self):
+        assert action_texts([line("使用神圣刀刃可以造成大量伤害并且附带效果", 10, 60)]) == []
+
+
 class TestLayout:
     bounds = (0, 0, 1920, 1080)
 

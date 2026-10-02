@@ -7,7 +7,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.weapon.info import (
     AffixLookup, AffixTier, NameIndex, WeaponInfo, WeaponLookup,
-    grade_of, load_weapon_info, normalize_text, parse_tier,
+    action_summary, grade_of, load_weapon_info, normalize_text, parse_tier, spell_summary,
+    strip_action_prefix, usable_action_hit,
 )
 
 
@@ -150,6 +151,109 @@ class TestWeaponLookup:
         assert make_info().lookup_weapon("不存在的武器名字") is None
 
 
+def motion(value, **overrides):
+    return {key: overrides.get(key, value) for key in ("physical", "magic", "fire", "lightning", "holy")}
+
+
+class TestActionSummary:
+    def test_uniform_motion_collapses_to_one_percent(self):
+        assert action_summary([{"motion": motion(240)}]) == "240%"
+
+    def test_uneven_motion_lists_elements(self):
+        assert action_summary([{"motion": motion(100, magic=150, fire=0)}]) == \
+            "物理 100% 魔力 150% 火焰 0% 雷电 100% 圣 100%"
+
+    def test_flat_damage_with_base_attack(self):
+        assert action_summary([{"flat": {"holy": 180}, "addBaseAtk": True}]) == "圣 180+基础"
+
+    def test_motion_and_flat_in_one_segment(self):
+        assert action_summary([{"motion": motion(40), "flat": {"magic": 30}, "addBaseAtk": True}]) == "40% 魔力 30+基础"
+
+    def test_base_attack_only(self):
+        assert action_summary([{"addBaseAtk": True}]) == "武器基础"
+
+    def test_consecutive_identical_segments_are_merged(self):
+        hits = [{"motion": motion(35)}, {"motion": motion(35)}, {"motion": motion(80)}, {"motion": motion(35)}]
+        assert action_summary(hits) == "35%×2 / 80% / 35%"
+
+    def test_unusable_segments_are_skipped(self):
+        hits = [
+            {"motion": motion(10), "noFp": True},
+            {"motion": motion(20), "notInvoked": True},
+            {"motion": motion(30), "noDamage": True},
+            {"motion": motion(40), "selfOrAllyOnly": True},
+            {"motion": motion(50), "chargeBranch": "charged"},
+            {"motion": motion(60), "chargeBranch": "partial"},
+            {"motion": motion(70), "chargeBranch": "uncharged"},
+            {"motion": motion(80), "chargeBranch": "both"},
+        ]
+        assert [usable_action_hit(hit) for hit in hits] == [False] * 6 + [True] * 2
+        assert action_summary(hits) == "70% / 80%"
+
+    def test_no_damage_at_all(self):
+        assert action_summary([{"noDamage": True}, {}]) is None
+        assert action_summary([]) is None
+
+    def test_spell_hides_the_constant_100_percent_motion(self):
+        hit = {"motion": motion(100), "flat": {"magic": 152}}
+        assert action_summary([hit], spell=True) == "魔力 152"
+        assert action_summary([hit]) == "100% 魔力 152"
+
+    def test_spell_summary_includes_fp_cost(self):
+        hit = {"motion": motion(100), "flat": {"magic": 152}}
+        assert spell_summary(7, [hit]) == "FP 7 · 魔力 152"
+        assert spell_summary(None, [hit]) == "魔力 152"
+        assert spell_summary(7, [{"noDamage": True}]) is None
+
+    def test_strip_action_prefix(self):
+        assert strip_action_prefix("战技：神圣刀刃") == "神圣刀刃"
+        assert strip_action_prefix("魔法: 辉石魔砾") == "辉石魔砾"
+        assert strip_action_prefix("祷告：黄金树立誓") == "黄金树立誓"
+        assert strip_action_prefix("神圣刀刃") == "神圣刀刃"
+
+
+class TestSkillSpellLookup:
+    info = WeaponInfo({
+        "weapons": {"火焰匕首": {"type": "短剑", "rarity": "普通", "correct": [13, 73, 0, 0, 0], "id": 1000000},
+                    "隐士的手杖": {"type": "辉石魔杖", "rarity": "普通", "correct": [0, 0, 100, 0, 0],
+                                   "id": 33750000, "caster": True}},
+        "skills": {"神圣刀刃": {"id": 201, "text": "圣 180+基础 / 65%", "byWeapon": {"2000000": "圣 200+基础"}},
+                   "无数值战技": {"id": 5, "text": None, "byWeapon": {}}},
+        "spells": {"辉石魔砾": {"id": 4000, "text": "FP 7 · 魔力 152"}},
+    })
+
+    def test_weapon_carries_id_and_caster_flag(self):
+        dagger = self.info.lookup_weapon("火焰匕首")
+        assert dagger.id == 1000000 and not dagger.caster
+        assert self.info.lookup_weapon("隐士的手杖").caster
+
+    def test_skill_lookup_ignores_prefix(self):
+        skill = self.info.lookup_skill("战技：神圣刀刃")
+        assert skill.name == "神圣刀刃" and skill.id == 201
+        assert skill.by_weapon == {2000000: "圣 200+基础"}
+
+    def test_skill_text_depends_on_weapon(self):
+        skill = self.info.lookup_skill("神圣刀刃")
+        assert skill.text_for(1000000) == "圣 180+基础 / 65%"
+        assert skill.text_for(2000000) == "圣 200+基础"
+        assert skill.text_for(None) == "圣 180+基础 / 65%"
+
+    def test_spell_lookup(self):
+        assert self.info.lookup_spell("魔法：辉石魔砾").text == "FP 7 · 魔力 152"
+        assert self.info.lookup_skill("辉石魔砾") is None
+
+    def test_unknown_action(self):
+        assert self.info.lookup_skill("完全无关的文字") is None
+        assert self.info.lookup_spell("完全无关的文字") is None
+
+    def test_skill_without_damage_data_is_still_found(self):
+        skill = self.info.lookup_skill("无数值战技")
+        assert skill is not None and skill.text is None
+
+    def test_data_without_skills_section(self):
+        assert make_info().lookup_skill("神圣刀刃") is None
+
+
 class TestRealData:
     """用仓库里实际打包的 data/weapons.json 做冒烟测试，防止数据格式和代码脱节"""
     info = load_weapon_info()
@@ -177,3 +281,21 @@ class TestRealData:
         for name in list(self.info._weapons)[::7]:
             w = self.info.lookup_weapon(name)
             assert w is not None and w.name == name, name
+
+    def test_skill_summaries(self):
+        assert self.info.lookup_skill("神圣刀刃").text == "圣 180+基础 / 65%"
+        assert self.info.lookup_skill("狮子斩").text == "240%"
+
+    def test_same_name_skill_and_spell(self):
+        assert self.info.lookup_skill("辉石魔砾").text
+        assert self.info.lookup_spell("辉石魔砾").text == "FP 7 · 魔力 152"
+
+    def test_caster_weapons_are_flagged(self):
+        assert self.info.lookup_weapon("隐士的手杖").caster
+        assert not self.info.lookup_weapon("匕首").caster
+
+    def test_same_name_skills_of_unique_weapons_keep_their_own_numbers(self):
+        # 两条同名的“不可挡之刃”分别属于直剑和拳套，合并成一行后仍要按武器区分
+        skill = self.info.lookup_skill("不可挡之刃")
+        texts = {skill.text_for(weapon_id) for weapon_id in (*skill.by_weapon, None)}
+        assert texts == {"250%+基础", "297%"}

@@ -563,8 +563,8 @@ class SettingsWindow(QWidget):
     WEAPON_POSITIONS = {"词条下方": POSITION_BELOW, "词条右侧": POSITION_RIGHT}
 
     def init_weapon_group(self):
-        # 武器信息：在游戏的武器信息面板上，把属性补正和词条的具体数值显示在对应文字旁边
-        self.weapon_group = QGroupBox("武器属性补正 / 词条数值")
+        # 武器信息：在游戏的武器信息面板上，把属性补正、词条的具体数值和战技 / 法术的伤害摘要显示在对应文字旁边
+        self.weapon_group = QGroupBox("武器属性补正 / 词条数值 / 战技法术伤害")
         form = make_form(self.weapon_group)
 
         self.weapon_detect_enable_checkbox = QCheckBox("启用武器信息显示")
@@ -575,8 +575,8 @@ class SettingsWindow(QWidget):
         self.weapon_region = None
         self.capture_weapon_region_input_widget = self.add_hotkey_row(
             form, "框选武器信息区域", self.capture_weapon_region,
-            "在游戏里打开武器信息面板（能同时看到武器名和词条文字的画面）后按下快捷键，\n"
-            "框选整块面板中的文字区域；区域越小识别越快，但要包含所有想查看的词条")
+            "在游戏里打开武器信息面板（能同时看到武器名、词条、战技和法术文字的画面）后按下快捷键，\n"
+            "框选整块面板中的文字区域；区域越小识别越快，但要包含所有想查看的文字")
         self.weapon_region_label = QLabel()
         self.clear_weapon_region_button = make_button("清除", self.clear_weapon_region)
         form.addRow("当前区域", make_row(self.weapon_region_label, self.clear_weapon_region_button))
@@ -603,7 +603,7 @@ class SettingsWindow(QWidget):
         form.addRow(self.weapon_status_label)
         form.addRow(make_tip_label(
             "数据来自游戏参数解包。属性补正为武器未强化时的基础值；"
-            "词条数值目前只覆盖伤害、异常累积、消耗等有数据的词条，其余词条显示“暂无数值数据”。"))
+            "词条数值目前只覆盖伤害、异常累积、消耗等有数据的词条，其余词条以及没有伤害的战技、法术显示“暂无数值数据”。"))
 
     def on_weapon_status(self, error_text: str):
         self.weapon_ocr_error = error_text or None
@@ -1680,11 +1680,11 @@ class SettingsWindow(QWidget):
     def show_weapon_help(self):
         msg = QMessageBox(self)
         msg.setMaximumWidth(460)
-        msg.setWindowTitle("武器属性补正 / 词条数值")
+        msg.setWindowTitle("武器属性补正 / 词条数值 / 战技法术伤害")
         layout: QVBoxLayout = QVBoxLayout()
         layout.addWidget(QLabel(
-            "该功能通过截屏文字识别（OCR）读取游戏里的武器名和词条名，\n"
-            "并把武器的属性补正、词条的具体加成数值显示在对应文字的旁边。"))
+            "该功能通过截屏文字识别（OCR）读取游戏里的武器名、词条名、战技名和法术名，\n"
+            "并把武器的属性补正、词条的具体加成数值、战技和法术的伤害摘要显示在对应文字的旁边。"))
         layout.addWidget(QLabel("1. 勾选“启用武器信息显示”，设置“框选武器信息区域”的快捷键"))
         layout.addWidget(QLabel("2. 在游戏里打开武器信息面板（拾取/查看武器时能看到武器名和词条的画面），按下快捷键"))
         layout.addWidget(QLabel("3. 框选整块面板的文字区域，保存。区域越小识别越快，但需要包含要查看的所有词条"))
@@ -1694,6 +1694,8 @@ class SettingsWindow(QWidget):
             "· 词条档位在游戏里看不出来时，会同时列出各档数值（如 +6%/+9%/+12%（档位1/2/3））\n"
             "· 属性补正为武器未强化时的基础值，评级参照艾尔登法环的划分（S≥175 / A≥140 / B≥90 / C≥60 / D≥25 / E），\n  与游戏里显示的字母可能因武器强化等级不同而有出入\n"
             "· 带“（条件触发）”的词条，数值只在满足条件时生效\n"
+            "· 战技显示各段的伤害倍率与固定伤害（如 圣 180+基础 / 65%，“+基础”表示再加上武器自身攻击力），法术显示专注消耗和固定伤害（如 FP 7 · 魔力 152）；"
+            "战技和法术同名时，按上方的武器是不是法杖 / 圣印记来选，同名战技的动作因武器而异时按上方的武器选择\n"
             "· 识别约需 1 秒，画面变化后会先隐藏旧数值再显示新结果"))
         msg.layout().addLayout(layout, 0, 0)
         msg.setStandardButtons(QMessageBox.StandardButton.Ok)

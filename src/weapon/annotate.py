@@ -1,9 +1,9 @@
 """
-把 OCR 识别出的文字行匹配到武器/词条，生成要显示在对应文字旁边的标注（纯逻辑，不依赖 Qt / OpenCV）
+把 OCR 识别出的文字行匹配到武器/词条/战技/法术，生成要显示在对应文字旁边的标注（纯逻辑，不依赖 Qt / OpenCV）
 """
 from dataclasses import dataclass
 
-from src.weapon.info import WeaponInfo, normalize_text
+from src.weapon.info import SkillLookup, SpellLookup, WeaponInfo, WeaponLookup, normalize_text
 from src.weapon.ocr import OcrLine
 
 Rect = tuple[int, int, int, int]    # x, y, w, h
@@ -13,11 +13,51 @@ NO_DATA_TEXT = "暂无数值数据"
 
 @dataclass
 class WeaponAnnotation:
-    kind: str       # "weapon" 武器属性补正 / "affix" 词条数值
+    kind: str       # "weapon" 武器属性补正 / "affix" 词条数值 / "skill" 战技 / "spell" 法术 / "mixed" 战技与法术同名且无法区分
     name: str       # 匹配到的武器名/词条名
     text: str       # 要显示的文案
     box: Rect       # 被识别文字行在屏幕上的位置（与截图区域相同的坐标系）
     dim: bool = False   # 数据里没有数值，只提示“已识别”
+
+
+def _shown(text: str | None) -> tuple[str, bool]:
+    return (text, False) if text else (NO_DATA_TEXT, True)
+
+
+def _nearest_weapon(weapons: list[tuple[Rect, WeaponLookup]], box: Rect) -> WeaponLookup | None:
+    """
+    战技 / 法术行所属的武器：装备面板里武器名在战技和法术的上方，所以优先取上方最近的；
+    对比面板有左右两列武器时，水平位置相差越大越不可能是同一列
+    """
+    if not weapons:
+        return None
+    above = [item for item in weapons if item[0][1] <= box[1] + 4]
+    return min(above or weapons, key=lambda item: abs(item[0][1] - box[1]) + 2 * abs(item[0][0] - box[0]))[1]
+
+
+def _action_annotation(text: str, box: Rect, skill: SkillLookup | None, spell: SpellLookup | None,
+                       weapon: WeaponLookup | None) -> WeaponAnnotation | None:
+    """
+    战技和法术可能同名（如“辉石魔砾”）：行首有“战技：”“魔法：”前缀时按前缀，
+    否则按上方武器是不是施法器；找不到武器时两个摘要都显示
+    """
+    if skill is None and spell is None:
+        return None
+    text = text.strip()
+    prefer_spell = text.startswith(("魔法", "祷告"))
+    prefer_skill = text.startswith("战技")
+    if skill is not None and spell is not None and not prefer_skill and not prefer_spell:
+        if weapon is None:
+            skill_text, skill_dim = _shown(skill.text_for(None))
+            spell_text, spell_dim = _shown(spell.text)
+            return WeaponAnnotation("mixed", skill.name, f"战技：{skill_text} · 法术：{spell_text}", box,
+                                    dim=skill_dim and spell_dim)
+        prefer_spell, prefer_skill = weapon.caster, not weapon.caster
+    if spell is not None and (prefer_spell or skill is None):
+        shown, dim = _shown(spell.text)
+        return WeaponAnnotation("spell", spell.name, shown, box, dim=dim)
+    shown, dim = _shown(skill.text_for(weapon.id if weapon is not None else None))
+    return WeaponAnnotation("skill", skill.name, shown, box, dim=dim)
 
 
 def build_annotations(
@@ -42,6 +82,8 @@ def build_annotations(
     ox, oy = origin
     annotations: list[WeaponAnnotation] = []
     line_boxes: list[Rect] = []
+    weapons: list[tuple[Rect, WeaponLookup]] = []
+    pending: list[tuple[str, Rect]] = []    # 不是武器也不是词条的行，可能是战技 / 法术名
 
     for line in lines:
         if line.score < min_score:
@@ -65,5 +107,17 @@ def build_annotations(
         weapon = info.lookup_weapon(line.text)
         if weapon is not None:
             annotations.append(WeaponAnnotation("weapon", weapon.name, weapon.correct_text(), box))
+            weapons.append((box, weapon))
+            continue
 
+        pending.append((line.text, box))
+
+    # 战技 / 法术要按上方的武器挑选动作，所以等武器都找到后再处理
+    for text, box in pending:
+        annotation = _action_annotation(
+            text, box, info.lookup_skill(text), info.lookup_spell(text), _nearest_weapon(weapons, box))
+        if annotation is not None:
+            annotations.append(annotation)
+
+    annotations.sort(key=lambda ann: (ann.box[1], ann.box[0]))    # 保持从上到下的顺序，布局时先放上面的
     return annotations, line_boxes
