@@ -111,6 +111,13 @@ class Config:
     art_detect_delay_seconds: float
     art_info: dict[str, dict[str, float]]
 
+    weapon_ocr_min_interval: float
+    weapon_change_threshold: float
+    weapon_hide_threshold: float
+    weapon_ocr_min_score: float
+    weapon_ocr_max_side: int
+    weapon_ocr_threads: int
+
     bug_report_email: str
 
     @staticmethod

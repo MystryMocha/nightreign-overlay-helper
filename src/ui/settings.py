@@ -22,6 +22,7 @@ from src.logger import info, warning, error, set_log_level, INFO, DEBUG, LOG_DIR
 from src.config import Config
 from src.ui.overlay import OverlayUIState, OverlayWidget, MIN_OVERLAY_OPACITY
 from src.ui.map_overlay import MapOverlayWidget, MapOverlayUIState
+from src.ui.weapon_overlay import WeaponOverlayUIState
 from src.ui.input import InputWorker, InputSettingWidget, InputSetting
 from src.ui.capture_region import CaptureRegionWindow
 from src.detector.rain_detector import RainDetector
@@ -578,6 +579,31 @@ class SettingsWindow(QWidget):
         self.clear_art_region_button = make_button("清除", self.clear_art_region)
         form.addRow("当前区域", make_row(self.art_region_label, self.clear_art_region_button))
 
+    def init_weapon_info_group(self):
+        self.weapon_info_group = QGroupBox("武器 / 战技 / 法术")
+        form = make_form(self.weapon_info_group)
+
+        self.weapon_detect_enable_checkbox = QCheckBox("启用武器面板数值")
+        self.weapon_detect_enable_checkbox.setChecked(False)
+        self.weapon_detect_enable_checkbox.stateChanged.connect(self.update_weapon_detect_enable)
+        form.addRow(make_row(self.weapon_detect_enable_checkbox, make_help_label(
+            "在装备栏里，于武器名旁显示基础补正，于战技和法术旁显示伤害摘要。\n"
+            "请框选包含武器名、战技名和法术名的面板区域。"
+        )))
+
+        self.weapon_region = None
+        self.capture_weapon_region_input_widget = self.add_hotkey_row(
+            form, "框选武器面板区域", self.capture_weapon_region)
+        self.weapon_region_label = QLabel()
+        self.clear_weapon_region_button = make_button("清除", self.clear_weapon_region)
+        form.addRow("当前区域", make_row(self.weapon_region_label, self.clear_weapon_region_button))
+        self.toggle_weapon_overlay_input_widget = self.add_hotkey_row(
+            form, "显示/隐藏武器数值", self.updater.toggle_weapon_overlay_by_shortcut)
+        self.weapon_ocr_status_label = QLabel()
+        self.weapon_ocr_status_label.setWordWrap(True)
+        form.addRow("识别状态", self.weapon_ocr_status_label)
+        self.updater.weapon_status_signal.connect(self.on_weapon_ocr_status)
+
     def init_advanced_group(self):
         # 高级参数（保存到 config_override.yaml，覆盖 config.yaml）
         self.advanced_group = QGroupBox("高级参数")
@@ -634,7 +660,7 @@ class SettingsWindow(QWidget):
         grid.setContentsMargins(8, 6, 8, 6)
         grid.setHorizontalSpacing(16)
         self.status_labels: list[QLabel] = []
-        for i in range(6):
+        for i in range(7):
             label = QLabel()
             label.setTextFormat(Qt.TextFormat.RichText)
             label.linkActivated.connect(lambda link: self.tabs.setCurrentIndex(int(link)))
@@ -647,7 +673,7 @@ class SettingsWindow(QWidget):
             ("计时器", [self.appearance_group, self.input_group]),
             ("自动计时", [self.auto_timer_group, self.hp_color_group]),
             ("地图识别", [self.map_detect_group, self.map_region_group, self.map_hotkey_group]),
-            ("血条 / 绝招", [self.hp_detect_group, self.art_timer_group]),
+            ("血条 / 绝招", [self.hp_detect_group, self.art_timer_group, self.weapon_info_group]),
             ("通用", [self.performance_group, self.advanced_group, self.other_group]),
         ]
         for title, groups in pages:
@@ -734,6 +760,8 @@ class SettingsWindow(QWidget):
             item("绝招倒计时", self.TAB_HP_ART, self.art_detect_enable_checkbox.isChecked(),
                  self.art_region is not None and bool(self.use_art_input_setting_widget.get_setting().type),
                  hint="未设置区域" if self.art_region is None else "未设置按键"),
+            item("武器面板", self.TAB_HP_ART, self.weapon_detect_enable_checkbox.isChecked(),
+                 self.weapon_region is not None),
         ]
         for label, text in zip(self.status_labels, items):
             label.setText(text)
@@ -847,6 +875,12 @@ class SettingsWindow(QWidget):
             self.use_art_input_setting_widget.set_setting(InputSetting.load_from_dict(data.get("use_art_input_setting")))
             self.art_region = valid_region(data.get("art_region"))
             self.update_art_region()
+            # 武器面板
+            load_checkbox_state(self.weapon_detect_enable_checkbox, data.get("weapon_detect_enabled", False))
+            self.capture_weapon_region_input_widget.set_setting(InputSetting.load_from_dict(data.get("capture_weapon_region_input_setting")))
+            self.toggle_weapon_overlay_input_widget.set_setting(InputSetting.load_from_dict(data.get("toggle_weapon_overlay_input_setting")))
+            self.weapon_region = valid_region(data.get("weapon_region"))
+            self.update_weapon_region()
             # 其他
             load_checkbox_state(self.debug_log_checkbox, data.get("debug_log_enabled", False))
             # HDR图像处理
@@ -927,6 +961,11 @@ class SettingsWindow(QWidget):
                 "capture_art_region_input_setting": asdict(self.capture_art_region_input_widget.get_setting()),
                 "use_art_input_setting": asdict(self.use_art_input_setting_widget.get_setting()),
                 "art_region": self.art_region,
+                # 武器面板
+                "weapon_detect_enabled": self.weapon_detect_enable_checkbox.isChecked(),
+                "capture_weapon_region_input_setting": asdict(self.capture_weapon_region_input_widget.get_setting()),
+                "toggle_weapon_overlay_input_setting": asdict(self.toggle_weapon_overlay_input_widget.get_setting()),
+                "weapon_region": self.weapon_region,
                 # 其他
                 "debug_log_enabled": self.debug_log_checkbox.isChecked(),
                 "hdr_processing_enabled": self.hdr_processing_checkbox.isChecked(),
@@ -947,6 +986,7 @@ class SettingsWindow(QWidget):
             is_setting_opened=True,
         ))
         self.updater.is_setting_opened = True
+        self.updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(is_setting_opened=True))
         # self.load_settings()
         super().showEvent(event)
         info("Settings window opened")
@@ -960,6 +1000,7 @@ class SettingsWindow(QWidget):
             is_setting_opened=False,
         ))
         self.updater.is_setting_opened = False
+        self.updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(is_setting_opened=False))
         self.save_settings()
         super().closeEvent(event)
         info("Settings window closed")
@@ -997,6 +1038,7 @@ class SettingsWindow(QWidget):
         self.init_map_detect_group()
         self.init_hp_detect_group()
         self.init_art_timer_group()
+        self.init_weapon_info_group()
         self.init_advanced_group()
         self.init_other_group()
         self.init_status_bar()
@@ -1533,6 +1575,7 @@ class SettingsWindow(QWidget):
         enabled = self.only_show_when_game_foreground_checkbox.isChecked()
         self.update_overlay_ui_state_signal.emit(OverlayUIState(only_show_when_game_foreground=enabled))
         self.update_map_overlay_ui_state_signal.emit(MapOverlayUIState(only_show_when_game_foreground=enabled))
+        self.updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(only_show_when_game_foreground=enabled))
         self.updater.only_detect_when_game_foreground = enabled
         info(f"Overlay only show when game foreground: {enabled}")
 
@@ -1690,6 +1733,55 @@ class SettingsWindow(QWidget):
         self.art_region = None
         self.update_art_region()
         self.save_settings()
+
+    # =========================== Weapon panel =========================== #
+
+    def update_weapon_detect_enable(self, state):
+        self.updater.weapon_detect_enabled = self.weapon_detect_enable_checkbox.isChecked()
+        info(f"Weapon detect enabled: {self.updater.weapon_detect_enabled}")
+
+    def capture_weapon_region(self):
+        color = "#2ecc71"
+        window = CaptureRegionWindow({
+            "annotation_buttons": [
+                {"pos": (0.5, 0.35), "size": 32, "color": color, "text": "点我并框出 武器面板 的区域"},
+            ],
+            "control_buttons": {
+                "cancel": {"pos": (0.3, 0.5), "size": 50, "color": "#b3b3b3", "text": "取消"},
+                "save": {"pos": (0.3, 0.6), "size": 50, "color": "#ffffff", "text": "保存"},
+            },
+        }, self.input)
+        region_result = window.capture_and_show()
+        if region_result is None:
+            warning("Weapon region setting canceled")
+            return
+        if screenshot := window.screenshot_at_saving:
+            screenshot.save(get_appdata_path("weapon_region_screenshot.jpg"))
+        for item in region_result:
+            if item["color"] == color:
+                self.weapon_region = list(item["rect"])
+        self.update_weapon_region()
+        self.save_settings()
+
+    def update_weapon_region(self):
+        self.updater.weapon_region = self.weapon_region
+        info(f"Updated weapon region: weapon_region={self.weapon_region}")
+        set_region_label(self.weapon_region_label, self.weapon_region)
+        self.clear_weapon_region_button.setEnabled(self.weapon_region is not None)
+        self.refresh_status()
+
+    def clear_weapon_region(self):
+        self.weapon_region = None
+        self.update_weapon_region()
+        self.save_settings()
+
+    def on_weapon_ocr_status(self, text: str):
+        if text:
+            self.weapon_ocr_status_label.setText(text)
+            self.weapon_ocr_status_label.setStyleSheet("color: #c0392b;")
+        else:
+            self.weapon_ocr_status_label.setText("正常")
+            self.weapon_ocr_status_label.setStyleSheet("color: #27ae60;")
 
     # =========================== Other =========================== #
     

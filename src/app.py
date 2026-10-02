@@ -22,6 +22,7 @@ from src.ui.input import InputWorker
 from src.ui.overlay import OverlayWidget
 from src.ui.map_overlay import MapOverlayWidget
 from src.ui.hp_overlay import HpOverlayWidget
+from src.ui.weapon_overlay import WeaponOverlayWidget, WeaponOverlayUIState
 from src.ui.settings import SettingsWindow
 from src.ui.admin_prompt import show_admin_prompt
 from src.updater import Updater
@@ -127,8 +128,9 @@ if __name__ == "__main__":
     overlay = OverlayWidget()
     map_overlay = MapOverlayWidget()
     hp_overlay = HpOverlayWidget()
+    weapon_overlay = WeaponOverlayWidget()
 
-    updater = Updater(input_worker, overlay, map_overlay, hp_overlay)
+    updater = Updater(input_worker, overlay, map_overlay, hp_overlay, weapon_overlay)
     settings_window = SettingsWindow(overlay, map_overlay, updater, input_worker)
     
     # 创建系统托盘图标和菜单
@@ -186,11 +188,13 @@ if __name__ == "__main__":
         overlay.is_menu_opened = True
         map_overlay.is_menu_opened = True
         updater.is_menu_opened = True
+        updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(is_menu_opened=True))
         # info("Menu opened")
     def on_menu_hide():
         overlay.is_menu_opened = False
         map_overlay.is_menu_opened = False
         updater.is_menu_opened = False
+        updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(is_menu_opened=False))
         # info("Menu closed")
 
     overlay.right_click_signal.connect(show_menu_at_cursor_pos)

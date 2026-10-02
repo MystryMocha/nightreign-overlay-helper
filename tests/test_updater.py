@@ -45,7 +45,7 @@ def make_updater(qapp, monkeypatch):
     def make(engine):
         monkeypatch.setattr(updater_module, "get_engine", lambda: engine)
         fake_input = FakeInput()
-        updater = Updater(fake_input, MagicMock(), MagicMock(), MagicMock())
+        updater = Updater(fake_input, MagicMock(), MagicMock(), MagicMock(), MagicMock())
         updater.fake_input = fake_input
         updater.overlay_states = []
         updater.update_overlay_ui_state_signal.connect(updater.overlay_states.append)
@@ -118,8 +118,9 @@ def test_capture_error_in_one_detector_does_not_stop_others(make_updater):
     updater.detect_and_update_map = lambda: order.append("map")
     updater.detect_and_update_hp = lambda: order.append("hp")
     updater.detect_and_update_art = lambda: order.append("art")
+    updater.detect_and_update_weapon = lambda: order.append("weapon")
     updater.detect_and_update_all()
-    assert order == ["dayx", "rain", "map", "hp", "art"]
+    assert order == ["dayx", "rain", "map", "hp", "art", "weapon"]
 
 
 def test_repeated_failures_are_logged_at_most_once_per_interval(make_updater):
@@ -176,3 +177,81 @@ def test_map_pattern_failure_restores_overlay_and_schedules_retry(make_updater):
     updater.detect_and_update_map()
     assert updater.map_pattern_retry_on_next_open is True
     assert map_states[-1].map_pattern_matching is False     # 不能停在"正在识别中"
+
+
+def make_weapon_result(updated=False, annotations=(), stale=False, ocr_error=None):
+    return MagicMock(weapon_detect_result=MagicMock(
+        updated=updated,
+        annotations=list(annotations),
+        line_boxes=[(0, 0, 10, 10)],
+        stale=stale,
+        ocr_error=ocr_error,
+    ))
+
+
+def test_weapon_annotation_updates_overlay_and_stale_flag(make_updater):
+    from src.weapon.annotate import WeaponAnnotation
+    updater = make_updater(FakeEngine())
+    states = []
+    statuses = []
+    updater.weapon_overlay_ui_state_signal.connect(states.append)
+    updater.weapon_status_signal.connect(statuses.append)
+    updater.weapon_detect_enabled = True
+    updater.weapon_region = [100, 200, 300, 400]
+    ann = WeaponAnnotation("affix", "强化魔法", "伤害 +5%/+8%/+11%（档位1/2/3）", (110, 210, 100, 20))
+    results = iter([
+        make_weapon_result(updated=True, annotations=[ann], stale=False),
+        make_weapon_result(updated=False, stale=False),
+        make_weapon_result(updated=False, stale=True),
+    ])
+    updater.detector.detect = lambda param: next(results)
+    updater.detect_and_update_weapon()
+    updater.detect_and_update_weapon()
+    updater.detect_and_update_weapon()
+    assert len(states) == 2
+    assert states[0].annotations == [ann]
+    assert states[0].region == (100, 200, 300, 400)
+    assert states[0].stale is False
+    assert statuses == []
+    assert states[1].stale is True
+    assert states[1].annotations is None
+
+
+def test_weapon_ocr_error_is_reported_once(make_updater):
+    updater = make_updater(FakeEngine())
+    statuses = []
+    updater.weapon_status_signal.connect(statuses.append)
+    updater.weapon_detect_enabled = True
+    updater.weapon_region = [1, 2, 3, 4]
+    updater.detector.detect = lambda param: make_weapon_result(ocr_error="ImportError: boom")
+    updater.detect_and_update_weapon()
+    updater.detect_and_update_weapon()
+    assert statuses == ["ImportError: boom"]
+
+
+def test_disabled_weapon_detect_clears_overlay(make_updater):
+    updater = make_updater(FakeEngine())
+    states = []
+    updater.weapon_overlay_ui_state_signal.connect(states.append)
+    updater.weapon_region = [1, 2, 3, 4]
+    updater._weapon_own_texts = "伤害 +5%"
+    updater.detector.detect = lambda param: make_weapon_result(updated=True)
+    updater.detect_and_update_weapon()
+    assert states[-1].annotations == []
+    assert states[-1].line_boxes == []
+    assert states[-1].stale is False
+    assert updater._weapon_own_texts == set()
+
+
+def test_weapon_overlay_receives_foreground_flag(make_updater):
+    updater = make_updater(FakeEngine())
+    states = []
+    updater.weapon_overlay_ui_state_signal.connect(states.append)
+    updater.check_game_foreground()
+    assert states[-1].is_game_foreground is False
+
+
+def test_stop_stops_weapon_detector(make_updater):
+    updater = make_updater(FakeEngine())
+    updater.stop()
+    updater.detector.weapon_detector.stop.assert_called_once()

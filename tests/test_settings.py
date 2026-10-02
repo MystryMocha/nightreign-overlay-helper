@@ -25,7 +25,7 @@ def make_window(qapp, monkeypatch):
         if settings_text is not None:
             with open(SETTINGS_SAVE_PATH, "w", encoding="utf-8") as f:
                 f.write(settings_text)
-        updater = updater_module.Updater(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+        updater = updater_module.Updater(MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock())
         window = SettingsWindow(OverlayWidget(), MapOverlayWidget(), updater, InputWorker())
         windows.append(window)
         return window, updater

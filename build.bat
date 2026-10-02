@@ -41,7 +41,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
-uv run pyinstaller --name "nightreign-overlay-helper" --windowed --onefile --distpath "dist\nightreign-overlay-helper" --icon="assets\icon.ico" --add-data "pyproject.toml;." --add-binary "native\MaaWin32Screencap.dll;native" src\app.py
+:: 模型下到 rapidocr 包内，PyInstaller 会随包打进 exe，首次识别不必再联网
+uv run python -c "from rapidocr.utils.download_models import download_models; download_models()"
+if errorlevel 1 (
+    echo OCR 模型下载失败，已中止构建
+    pause
+    exit /b 1
+)
+
+:: spec 会收集 rapidocr 及其模型；武器面板 OCR 离线识别依赖它们
+uv run pyinstaller --noconfirm --distpath "dist\nightreign-overlay-helper" --workpath "build" nightreign-overlay-helper.spec
 if errorlevel 1 (
     echo PyInstaller 打包失败
     pause

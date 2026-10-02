@@ -155,3 +155,11 @@ art_progress_css: |
 # 绝招冒险文字样式
 art_text_css: |
   color: white; font-weight: bold; font-size: {font_size}px;
+
+# 武器面板 OCR。变化比例按缩略图像素计，隐藏阈值按文字行平均灰度差计
+weapon_ocr_min_interval: 0.6
+weapon_change_threshold: 0.02
+weapon_hide_threshold: 0.08
+weapon_ocr_min_score: 0.5
+weapon_ocr_max_side: 1280
+weapon_ocr_threads: 2

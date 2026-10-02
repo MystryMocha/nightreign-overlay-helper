@@ -10,6 +10,7 @@ from src.ui.input import InputWorker
 from src.ui.overlay import OverlayWidget, OverlayUIState
 from src.ui.map_overlay import MapOverlayWidget, MapOverlayUIState
 from src.ui.hp_overlay import HpOverlayWidget, HpOverlayUIState
+from src.ui.weapon_overlay import WeaponOverlayWidget, WeaponOverlayUIState
 from src.detector import (
     DetectorManager, 
     DetectParam, 
@@ -18,6 +19,7 @@ from src.detector import (
     MapDetectParam,
     HpDetectParam,
     ArtDetectParam,
+    WeaponDetectParam,
 )
 from src.ui.utils import is_window_in_foreground, get_qt_screen_by_region, process_region_to_adapt_scale
 from src.screencap import (
@@ -53,6 +55,8 @@ class Updater(QObject):
     update_overlay_ui_state_signal = pyqtSignal(OverlayUIState)
     update_map_overlay_ui_state_signal = pyqtSignal(MapOverlayUIState)
     hp_overlay_ui_state_signal = pyqtSignal(HpOverlayUIState)
+    weapon_overlay_ui_state_signal = pyqtSignal(WeaponOverlayUIState)
+    weapon_status_signal = pyqtSignal(str)
 
     def __init__(
         self, 
@@ -60,6 +64,7 @@ class Updater(QObject):
         overlay: OverlayWidget, 
         map_overlay: MapOverlayWidget,
         hp_overlay: HpOverlayWidget,
+        weapon_overlay: WeaponOverlayWidget,
     ):
         super().__init__()
         self._running = False
@@ -123,6 +128,15 @@ class Updater(QObject):
         self.art_start_time: float = 0.0
         self.art_region: tuple[int] = None
         self.art_type: str = None
+
+        self.weapon_overlay = weapon_overlay
+        self.weapon_overlay_ui_state_signal.connect(self.weapon_overlay.update_ui_state)
+        self.weapon_detect_enabled: bool = False
+        self.weapon_region: tuple[int, int, int, int] | None = None
+        self.weapon_overlay_visible: bool = True
+        self._weapon_stale: bool | None = None
+        self._weapon_ocr_error: str = ""
+        self._weapon_own_texts: set[str] = set()
 
         # HDR图像处理设置
         self.hdr_processing_enabled: bool = False
@@ -629,6 +643,53 @@ class Updater(QObject):
         progress = 1.0 - t / duration
         text = f"{text} {format_period(int(max(duration - t, 0)))}"
         return progress, text, color
+
+    # =============== Weapon panel =============== #
+
+    def toggle_weapon_overlay_by_shortcut(self):
+        self.weapon_overlay_visible = not self.weapon_overlay_visible
+        self.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(visible=self.weapon_overlay_visible))
+
+    def detect_and_update_weapon(self):
+        if not self.weapon_detect_enabled or self.weapon_region is None:
+            result = self.detector.detect(DetectParam(
+                weapon_detect_param=WeaponDetectParam(region=None),
+            ))
+            if result.weapon_detect_result.updated:
+                self._weapon_own_texts = set()
+                self._weapon_stale = None
+                self.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(
+                    annotations=[],
+                    line_boxes=[],
+                    stale=False,
+                ))
+            return
+
+        result = self.detector.detect(DetectParam(
+            weapon_detect_param=WeaponDetectParam(
+                region=tuple(self.weapon_region),
+                hdr_processing_enabled=self.hdr_processing_enabled,
+                ignore_texts=set(self._weapon_own_texts),
+            ),
+        ))
+        weapon_result = result.weapon_detect_result
+        if weapon_result.updated:
+            self._weapon_own_texts = {item.text for item in weapon_result.annotations}
+            self._weapon_stale = weapon_result.stale
+            self.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(
+                annotations=list(weapon_result.annotations),
+                line_boxes=list(weapon_result.line_boxes),
+                region=tuple(self.weapon_region),
+                stale=weapon_result.stale,
+            ))
+            info("Weapon info updated: " + str([(item.name, item.text) for item in weapon_result.annotations]))
+        ocr_error = weapon_result.ocr_error or ""
+        if ocr_error != self._weapon_ocr_error:
+            self._weapon_ocr_error = ocr_error
+            self.weapon_status_signal.emit(ocr_error)
+        if not weapon_result.updated and weapon_result.stale != self._weapon_stale:
+            self._weapon_stale = weapon_result.stale
+            self.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(stale=weapon_result.stale))
         
     # =============== Main Loop =============== #
 
@@ -646,6 +707,7 @@ class Updater(QObject):
             self.detect_and_update_map,
             self.detect_and_update_hp,
             self.detect_and_update_art,
+            self.detect_and_update_weapon,
         ]:
             try:
                 detect_fn()
@@ -672,6 +734,9 @@ class Updater(QObject):
             only_show_when_game_foreground=self.only_detect_when_game_foreground,
             is_menu_opened=self.is_menu_opened,
             is_setting_opened=self.is_setting_opened,
+        ))
+        self.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(
+            is_game_foreground=is_foreground,
         ))
 
         # 直接设置标志位：输入线程一直阻塞在 run() 里没有事件循环，通过信号队列调用 blockSignals 永远不会执行
@@ -755,3 +820,4 @@ class Updater(QObject):
 
     def stop(self):
         self._running = False
+        self.detector.weapon_detector.stop()
