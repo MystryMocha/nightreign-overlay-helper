@@ -52,8 +52,10 @@ class OcrEngine:
             self._ensure_loaded()
             if self._engine is None:
                 return []
-            output = self._engine(np.ascontiguousarray(image_rgb))
-            if output is None or not getattr(output, "boxes", None):
+            output = self._engine(np.ascontiguousarray(image_rgb[:, :, ::-1]))   # RapidOCR 需要 BGR
+            # boxes 是 numpy 数组，不能直接做真假判断（多于一个元素时会抛 ValueError）
+            boxes = getattr(output, "boxes", None)
+            if boxes is None or len(boxes) == 0 or output.txts is None:
                 return []
             lines: list[OcrLine] = []
             for poly, text, score in zip(output.boxes, output.txts, output.scores):
