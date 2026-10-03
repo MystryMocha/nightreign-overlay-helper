@@ -90,6 +90,7 @@ class Config:
     min_map_pattern_match_topk: int
     map_pattern_retry_error_threshold: float
     map_pattern_max_retry: int
+    map_pattern_detect_delay: float
 
     crystal_detect_max_offset: int
     crystal_detect_threshold: float

@@ -171,12 +171,37 @@ def test_map_pattern_failure_restores_overlay_and_schedules_retry(make_updater):
     updater.do_match_map_pattern_flag = updater_module.DoMatchMapPatternFlag.TRUE
     updater.last_map_pattern_match_time = updater.get_time()
     updater.crystal_auto_detect_enabled = False
+    updater.current_is_full_map = True      # 地图已打开一段时间，已完全淡入
+    updater.full_map_opened_time = 0.0
     map_states = []
     updater.update_map_overlay_ui_state_signal.connect(map_states.append)
     updater.detect_and_update_map()
     assert updater.map_pattern_retry_on_next_open is True
     assert map_states[-1].map_pattern_matching is False     # 不能停在"正在识别中"
 
+
+
+def test_map_pattern_waits_for_map_fade_in(make_updater):
+    """刚打开地图的第一帧还是半透明的，不能用它识别种子，要等地图完全淡入"""
+    updater = make_updater(FakeEngine())
+    updater.manual_map_region = [0, 0, 100, 100]
+    calls = []
+
+    def fake_detect(param):
+        calls.append(param.map_detect_param)
+        return MagicMock(map_detect_result=MagicMock(is_full_map=True, img=object(), earth_shifting=None))
+    updater.detector.detect = fake_detect
+    updater.do_match_map_pattern_flag = updater_module.DoMatchMapPatternFlag.TRUE
+    updater.last_map_pattern_match_time = updater.get_time()
+    updater.crystal_auto_detect_enabled = False
+
+    updater.detect_and_update_map()     # 地图刚打开
+    assert len(calls) == 1              # 只做了全图检测，没有识别地形和种子
+    assert updater.do_match_map_pattern_flag == updater_module.DoMatchMapPatternFlag.TRUE
+
+    updater.full_map_opened_time -= 10  # 地图已打开足够久
+    updater.detect_and_update_map()
+    assert any(p.do_match_earth_shifting for p in calls[1:])
 
 def make_weapon_result(updated=False, annotations=(), stale=False, ocr_error=None):
     return MagicMock(weapon_detect_result=MagicMock(

@@ -103,6 +103,7 @@ class Updater(QObject):
         self.manual_map_region: tuple[int] = None
         self.auto_map_region: tuple[int] = None
         self.current_is_full_map: bool = False
+        self.full_map_opened_time: float = 0.0          # 本次打开地图（变为全图）的时间
         self.do_match_map_pattern_flag: DoMatchMapPatternFlag = DoMatchMapPatternFlag.TRUE
         self.map_overlay_visible: bool = False
         self.last_map_pattern_match_time: float = 0.0
@@ -480,6 +481,7 @@ class Updater(QObject):
             if is_full_map and not self.current_is_full_map:
                 info("Current map changed to full map.")
                 self.current_is_full_map = True
+                self.full_map_opened_time = time.time()
                 map_just_opened = True
                 self.show_map_overlay()
                 if self.map_pattern_retry_on_next_open:
@@ -504,7 +506,10 @@ class Updater(QObject):
             self.update_map_overlay_images(None)
             info("Hide overlay and prepared to detect map pattern.")
 
-        elif self.do_match_map_pattern_flag == DoMatchMapPatternFlag.TRUE and is_full_map:
+        elif self.do_match_map_pattern_flag == DoMatchMapPatternFlag.TRUE and is_full_map \
+                and time.time() - self.full_map_opened_time >= Config.get().map_pattern_detect_delay:
+            # 打开地图后等地图完全淡入再识别：刚打开的第一帧地图还是半透明的，
+            # 用它匹配POI会选中错误的种子，整张图的BOSS和建筑标记都会对不上
             # 特殊地形识别成功才进行匹配（避免地图半透明时就识别）
             result = self.detector.detect(DetectParam(
                 map_detect_param=MapDetectParam(
