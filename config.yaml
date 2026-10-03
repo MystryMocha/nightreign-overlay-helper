@@ -57,6 +57,7 @@ max_map_pattern_match_topk: 10               # 地图识别返回的最佳结果
 min_map_pattern_match_topk: 1                # 地图识别返回的最佳结果数量最小值
 map_pattern_retry_error_threshold: 60        # 最佳识别结果误差高于此值时，下次打开地图自动重新识别
 map_pattern_max_retry: 2                     # 识别结果误差过高时的最大自动重试次数
+map_pattern_detect_delay: 0.5                # 打开地图后等待多久再识别地图种子(秒)，避免用地图淡入时的半透明画面识别
 
 # 大空洞水晶布局自动识别（识别地图上已被破除的水晶图标，可在设置中关闭）
 crystal_detect_max_offset: 14             # 水晶图标相对点位允许偏移(750x750标准地图坐标)
