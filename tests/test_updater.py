@@ -45,7 +45,7 @@ def make_updater(qapp, monkeypatch):
     def make(engine):
         monkeypatch.setattr(updater_module, "get_engine", lambda: engine)
         fake_input = FakeInput()
-        updater = Updater(fake_input, MagicMock(), MagicMock(), MagicMock(), MagicMock())
+        updater = Updater(fake_input, *(MagicMock() for _ in range(5)))
         updater.fake_input = fake_input
         updater.overlay_states = []
         updater.update_overlay_ui_state_signal.connect(updater.overlay_states.append)
@@ -252,13 +252,13 @@ def test_weapon_detect_reports_ocr_error_once(make_updater):
 def test_disabled_weapon_detect_clears_overlay_and_ignores_own_text(make_updater):
     updater = make_updater(FakeEngine())
     updater.weapon_region = [1, 2, 3, 4]
-    updater._weapon_own_texts = {"伤害 +5%"}
+    updater._weapon_panel.own_texts = {"伤害 +5%"}
     states = []
     updater.weapon_overlay_ui_state_signal.connect(states.append)
     updater.detector.detect = lambda param: make_weapon_result(updated=True)   # 检测器通知“已清除”
     updater.detect_and_update_weapon()          # 未启用
     assert len(states) == 1 and states[0].annotations == [] and states[0].stale is False
-    assert updater._weapon_own_texts == set()
+    assert updater._weapon_panel.own_texts == set()
 
 
 def test_foreground_state_is_forwarded_to_weapon_overlay(make_updater):
@@ -273,3 +273,104 @@ def test_stop_stops_weapon_ocr_worker(make_updater):
     updater = make_updater(FakeEngine())
     updater.stop()
     updater.detector.weapon_detector.stop.assert_called_once()
+
+
+def make_relic_result(updated=False, annotations=(), stale=False, ocr_error=None):
+    return MagicMock(relic_detect_result=MagicMock(
+        updated=updated, annotations=list(annotations), line_boxes=[(0, 0, 10, 10)], stale=stale, ocr_error=ocr_error))
+
+
+def test_relic_detect_publishes_results_and_stale_state(make_updater):
+    from src.weapon.annotate import WeaponAnnotation
+    updater = make_updater(FakeEngine())
+    updater.relic_detect_enabled = True
+    updater.relic_region = [100, 200, 300, 400]
+    states, weapon_states, statuses, params = [], [], [], []
+    updater.relic_overlay_ui_state_signal.connect(states.append)
+    updater.weapon_overlay_ui_state_signal.connect(weapon_states.append)
+    updater.relic_status_signal.connect(statuses.append)
+
+    ann = WeaponAnnotation("affix", "提升物理攻击力＋２", "物理攻击力 +6%", (110, 210, 100, 20))
+    results = iter([
+        make_relic_result(updated=True, annotations=[ann]),
+        make_relic_result(stale=False),
+        make_relic_result(stale=True),
+    ])
+    updater.detector.detect = lambda param: (params.append(param), next(results))[1]
+
+    updater.detect_and_update_relic()
+    assert len(states) == 1
+    assert states[0].annotations == [ann] and states[0].region == (100, 200, 300, 400) and states[0].stale is False
+    assert statuses == []
+    # 只请求遗物的检测，结果也只发给遗物的悬浮窗，不会干扰武器信息
+    assert params[0].relic_detect_param.region == (100, 200, 300, 400) and params[0].weapon_detect_param is None
+    assert weapon_states == []
+
+    updater.detect_and_update_relic()
+    assert len(states) == 1
+
+    updater.detect_and_update_relic()
+    assert len(states) == 2 and states[1].stale is True and states[1].annotations is None
+
+
+def test_relic_detect_reports_ocr_error_once(make_updater):
+    updater = make_updater(FakeEngine())
+    updater.relic_detect_enabled = True
+    updater.relic_region = [1, 2, 3, 4]
+    statuses = []
+    updater.relic_status_signal.connect(statuses.append)
+    updater.detector.detect = lambda param: make_relic_result(updated=True, ocr_error="ImportError: boom")
+    updater.detect_and_update_relic()
+    updater.detect_and_update_relic()
+    assert statuses == ["ImportError: boom"]
+
+
+def test_disabled_relic_detect_clears_overlay_and_ignores_own_text(make_updater):
+    updater = make_updater(FakeEngine())
+    updater.relic_region = [1, 2, 3, 4]
+    updater._relic_panel.own_texts = {"物理攻击力 +6%"}
+    states = []
+    updater.relic_overlay_ui_state_signal.connect(states.append)
+    updater.detector.detect = lambda param: make_relic_result(updated=True)
+    updater.detect_and_update_relic()           # 未启用
+    assert len(states) == 1 and states[0].annotations == [] and states[0].stale is False
+    assert updater._relic_panel.own_texts == set()
+
+
+def test_weapon_and_relic_keep_separate_state(make_updater):
+    updater = make_updater(FakeEngine())
+    updater.weapon_detect_enabled = updater.relic_detect_enabled = True
+    updater.weapon_region = updater.relic_region = [1, 2, 3, 4]
+    updater.detector.detect = lambda param: MagicMock(
+        weapon_detect_result=MagicMock(updated=False, stale=True),
+        relic_detect_result=MagicMock(updated=False, stale=False))
+    weapon_states, relic_states = [], []
+    updater.weapon_overlay_ui_state_signal.connect(weapon_states.append)
+    updater.relic_overlay_ui_state_signal.connect(relic_states.append)
+    updater.detect_and_update_weapon()
+    updater.detect_and_update_relic()
+    assert [s.stale for s in weapon_states] == [True]
+    assert [s.stale for s in relic_states] == [False]
+
+
+def test_foreground_state_is_forwarded_to_relic_overlay(make_updater):
+    updater = make_updater(FakeEngine())
+    states = []
+    updater.relic_overlay_ui_state_signal.connect(states.append)
+    updater.check_game_foreground()
+    assert states[-1].is_game_foreground is False
+
+
+def test_stop_stops_relic_ocr_worker(make_updater):
+    updater = make_updater(FakeEngine())
+    updater.stop()
+    updater.detector.relic_detector.stop.assert_called_once()
+
+
+def test_toggle_relic_overlay_by_shortcut(make_updater):
+    updater = make_updater(FakeEngine())
+    states = []
+    updater.relic_overlay_ui_state_signal.connect(states.append)
+    updater.toggle_relic_overlay_by_shortcut()
+    updater.toggle_relic_overlay_by_shortcut()
+    assert [s.visible for s in states] == [False, True]

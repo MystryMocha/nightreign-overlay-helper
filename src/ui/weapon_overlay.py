@@ -43,6 +43,7 @@ class WeaponOverlayUIState:
 class WeaponOverlayWidget(QWidget):
     """
     覆盖整个屏幕的透明、鼠标穿透窗口，把武器属性补正/词条数值画在游戏里对应文字的旁边
+    遗物词条数值的显示也用这个窗口（独立的另一个实例）：它只负责把标注画在文字旁边，不关心标注是哪来的
     """
 
     def __init__(self):
@@ -135,7 +136,9 @@ class WeaponOverlayWidget(QWidget):
 
         fonts, texts, sizes = [], [], []
         for ann, anchor in zip(self.annotations, anchors):
-            font = self._font_for(anchor[3])
+            # 词条名折成多行时锚点是整块文字，字号要按其中单行的高度算（换算到 Qt 逻辑像素的比例与锚点一致）
+            line_height = anchor[3] * ann.line_height / ann.box[3] if ann.line_height else anchor[3]
+            font = self._font_for(int(line_height))
             fm = QFontMetrics(font)
             max_w = fm.horizontalAdvance("字") * MAX_TEXT_WIDTH_CHARS
             text_rect = fm.boundingRect(QRect(0, 0, max_w, 10000), int(Qt.TextFlag.TextWordWrap), ann.text)

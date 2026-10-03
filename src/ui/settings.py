@@ -613,6 +613,63 @@ class SettingsWindow(QWidget):
             "数据来自游戏参数解包。属性补正为武器未强化时的基础值；"
             "词条数值目前只覆盖伤害、异常累积、消耗等有数据的词条，其余词条以及没有伤害的战技、法术显示“暂无数值数据”。"))
 
+    RELIC_POSITIONS = WEAPON_POSITIONS
+
+    def init_relic_group(self):
+        # 遗物词条数值：在遗物仪式界面上，把遗物词条的具体数值显示在对应文字旁边
+        self.relic_group = QGroupBox("遗物仪式 / 词条数值")
+        form = make_form(self.relic_group)
+
+        self.relic_detect_enable_checkbox = QCheckBox("启用遗物词条数值显示")
+        self.relic_detect_enable_checkbox.stateChanged.connect(self.update_relic_detect_enable)
+        form.addRow(make_row(self.relic_detect_enable_checkbox,
+                             make_button("查看帮助", self.show_relic_help)))
+
+        self.relic_region = None
+        self.capture_relic_region_input_widget = self.add_hotkey_row(
+            form, "框选遗物区域", self.capture_relic_region,
+            "在游戏里打开遗物仪式界面后按下快捷键，框选要识别的区域；\n"
+            "至少要包含左右两块遗物描述（词条文字）所在的位置，也可以直接框选整个游戏画面。区域越小识别越快")
+        self.relic_region_label = QLabel()
+        self.clear_relic_region_button = make_button("清除", self.clear_relic_region)
+        form.addRow("当前区域", make_row(self.relic_region_label, self.clear_relic_region_button))
+
+        self.relic_position_combobox = QComboBox()
+        for name in self.RELIC_POSITIONS:
+            self.relic_position_combobox.addItem(name)
+        self.relic_position_combobox.currentTextChanged.connect(self.update_relic_position)
+        form.addRow("显示位置", make_row(self.relic_position_combobox, make_help_label(
+            "数值显示在对应词条的下方或右侧\n某一侧会压住其他文字或超出屏幕时，自动换到另一侧"), stretch=False))
+
+        self.relic_font_scale_slider = QSlider(Qt.Orientation.Horizontal)
+        self.relic_font_scale_slider.setRange(60, 200)
+        self.relic_font_scale_slider.setValue(100)
+        self.relic_font_scale_value_label = make_value_label()
+        self.relic_font_scale_slider.valueChanged.connect(self.update_relic_font_scale)
+        form.addRow("字号", make_row(self.relic_font_scale_slider, self.relic_font_scale_value_label, stretch=False))
+
+        self.toggle_relic_overlay_input_widget = self.add_hotkey_row(
+            form, "显示/隐藏遗物数值", self.updater.toggle_relic_overlay_by_shortcut)
+
+        self.relic_status_label = QLabel()
+        self.relic_status_label.setWordWrap(True)
+        form.addRow(self.relic_status_label)
+        form.addRow(make_tip_label(
+            "数据来自游戏参数解包和社区整理的词条库。没有数值的词条（如“出击时，会持有……”）显示“暂无数值数据”。"
+            "与武器信息共用文字识别组件。"))
+
+    def on_relic_status(self, error_text: str):
+        self.relic_ocr_error = error_text or None
+        self.refresh_relic_status_label()
+        self.refresh_status()
+
+    def refresh_relic_status_label(self):
+        if self.relic_ocr_error:
+            self.relic_status_label.setText(f"⚠️ 文字识别组件不可用：{self.relic_ocr_error}")
+            self.relic_status_label.setStyleSheet("color: #c0392b;")
+        else:
+            self.relic_status_label.setText("")
+
     def on_weapon_status(self, error_text: str):
         self.weapon_ocr_error = error_text or None
         self.refresh_weapon_status_label()
@@ -701,7 +758,7 @@ class SettingsWindow(QWidget):
         grid.setContentsMargins(8, 6, 8, 6)
         grid.setHorizontalSpacing(16)
         self.status_labels: list[QLabel] = []
-        for i in range(7):
+        for i in range(8):
             label = QLabel()
             label.setTextFormat(Qt.TextFormat.RichText)
             label.linkActivated.connect(lambda link: self.tabs.setCurrentIndex(int(link)))
@@ -714,7 +771,7 @@ class SettingsWindow(QWidget):
             ("计时器", [self.appearance_group, self.input_group]),
             ("自动计时", [self.auto_timer_group, self.hp_color_group]),
             ("地图识别", [self.map_detect_group, self.map_region_group, self.map_hotkey_group]),
-            ("武器信息", [self.weapon_group]),
+            ("武器 / 遗物", [self.weapon_group, self.relic_group]),
             ("血条 / 绝招", [self.hp_detect_group, self.art_timer_group]),
             ("通用", [self.performance_group, self.advanced_group, self.other_group]),
         ]
@@ -800,6 +857,9 @@ class SettingsWindow(QWidget):
             item("武器信息", self.TAB_WEAPON, self.weapon_detect_enable_checkbox.isChecked(),
                  self.weapon_region is not None and not self.weapon_ocr_error,
                  hint="未设置区域" if self.weapon_region is None else "识别组件不可用"),
+            item("遗物词条", self.TAB_WEAPON, self.relic_detect_enable_checkbox.isChecked(),
+                 self.relic_region is not None and not self.relic_ocr_error,
+                 hint="未设置区域" if self.relic_region is None else "识别组件不可用"),
             item("血条标记", self.TAB_HP_ART, self.hp_detect_enable_checkbox.isChecked(),
                  self.hpbar_region is not None),
             item("绝招倒计时", self.TAB_HP_ART, self.art_detect_enable_checkbox.isChecked(),
@@ -917,6 +977,17 @@ class SettingsWindow(QWidget):
             if isinstance(weapon_font_scale, bool) or not isinstance(weapon_font_scale, (int, float)):
                 weapon_font_scale = 100
             load_slider_value(self.weapon_font_scale_slider, weapon_font_scale)
+            # 遗物词条数值
+            load_checkbox_state(self.relic_detect_enable_checkbox, data.get("relic_detect_enabled", False))
+            self.capture_relic_region_input_widget.set_setting(InputSetting.load_from_dict(data.get("capture_relic_region_input_setting")))
+            self.toggle_relic_overlay_input_widget.set_setting(InputSetting.load_from_dict(data.get("toggle_relic_overlay_input_setting")))
+            self.relic_region = valid_region(data.get("relic_region"))
+            self.update_relic_region()
+            load_combobox_value(self.relic_position_combobox, data.get("relic_position", "词条下方"))
+            relic_font_scale = data.get("relic_font_scale", 100)
+            if isinstance(relic_font_scale, bool) or not isinstance(relic_font_scale, (int, float)):
+                relic_font_scale = 100
+            load_slider_value(self.relic_font_scale_slider, relic_font_scale)
             # 血条比例标记
             load_checkbox_state(self.hp_detect_enable_checkbox, data.get("hp_detect_enabled", True))
             load_checkbox_state(self.hp_detect_keep_last_valid_checkbox, data.get("hp_detect_keep_last_valid", False))
@@ -1007,6 +1078,13 @@ class SettingsWindow(QWidget):
                 "weapon_region": self.weapon_region,
                 "weapon_position": self.weapon_position_combobox.currentText(),
                 "weapon_font_scale": self.weapon_font_scale_slider.value(),
+                # 遗物词条数值
+                "relic_detect_enabled": self.relic_detect_enable_checkbox.isChecked(),
+                "capture_relic_region_input_setting": asdict(self.capture_relic_region_input_widget.get_setting()),
+                "toggle_relic_overlay_input_setting": asdict(self.toggle_relic_overlay_input_widget.get_setting()),
+                "relic_region": self.relic_region,
+                "relic_position": self.relic_position_combobox.currentText(),
+                "relic_font_scale": self.relic_font_scale_slider.value(),
                 # 血条比例标记
                 "hp_detect_enabled": self.hp_detect_enable_checkbox.isChecked(),
                 "hp_detect_keep_last_valid": self.hp_detect_keep_last_valid_checkbox.isChecked(),
@@ -1038,6 +1116,7 @@ class SettingsWindow(QWidget):
             is_setting_opened=True,
         ))
         self.updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(is_setting_opened=True))
+        self.updater.relic_overlay_ui_state_signal.emit(WeaponOverlayUIState(is_setting_opened=True))
         self.updater.is_setting_opened = True
         # self.load_settings()
         super().showEvent(event)
@@ -1052,6 +1131,7 @@ class SettingsWindow(QWidget):
             is_setting_opened=False,
         ))
         self.updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(is_setting_opened=False))
+        self.updater.relic_overlay_ui_state_signal.emit(WeaponOverlayUIState(is_setting_opened=False))
         self.updater.is_setting_opened = False
         self.save_settings()
         super().closeEvent(event)
@@ -1083,6 +1163,8 @@ class SettingsWindow(QWidget):
         self.hotkey_widgets: list[tuple[str, InputSettingWidget]] = []
         self.weapon_ocr_error: str | None = None
         updater.weapon_status_signal.connect(self.on_weapon_status)
+        self.relic_ocr_error: str | None = None
+        updater.relic_status_signal.connect(self.on_relic_status)
 
         self.init_appearance_group()
         self.init_input_group()
@@ -1091,6 +1173,7 @@ class SettingsWindow(QWidget):
         self.init_hp_color_group()
         self.init_map_detect_group()
         self.init_weapon_group()
+        self.init_relic_group()
         self.init_hp_detect_group()
         self.init_art_timer_group()
         self.init_advanced_group()
@@ -1630,6 +1713,7 @@ class SettingsWindow(QWidget):
         self.update_overlay_ui_state_signal.emit(OverlayUIState(only_show_when_game_foreground=enabled))
         self.update_map_overlay_ui_state_signal.emit(MapOverlayUIState(only_show_when_game_foreground=enabled))
         self.updater.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(only_show_when_game_foreground=enabled))
+        self.updater.relic_overlay_ui_state_signal.emit(WeaponOverlayUIState(only_show_when_game_foreground=enabled))
         self.updater.only_detect_when_game_foreground = enabled
         info(f"Overlay only show when game foreground: {enabled}")
 
@@ -1707,6 +1791,83 @@ class SettingsWindow(QWidget):
             "· 战技显示各段的伤害倍率与固定伤害（如 圣 180+基础 / 65%，“+基础”表示再加上武器自身攻击力），法术显示专注消耗和固定伤害（如 FP 7 · 魔力 152）；"
             "战技和法术同名时，按上方的武器是不是法杖 / 圣印记来选，同名战技的动作因武器而异时按上方的武器选择\n"
             "· 识别约需 1 秒，画面变化后会先隐藏旧数值再显示新结果"))
+        msg.layout().addLayout(layout, 0, 0)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
+
+    # =========================== Relic Affix =========================== #
+
+    def update_relic_detect_enable(self, state):
+        self.updater.relic_detect_enabled = self.relic_detect_enable_checkbox.isChecked()
+        info(f"Relic affix enabled: {self.updater.relic_detect_enabled}")
+        self.refresh_status()
+
+    def update_relic_position(self, text: str):
+        position = self.RELIC_POSITIONS.get(text)
+        if position is None:
+            return
+        self.updater.relic_overlay_ui_state_signal.emit(WeaponOverlayUIState(position=position))
+        info(f"Relic affix position: {position}")
+
+    def update_relic_font_scale(self, value: int):
+        self.relic_font_scale_value_label.setText(f"{value}%")
+        self.updater.relic_overlay_ui_state_signal.emit(WeaponOverlayUIState(font_scale=value / 100.0))
+
+    def capture_relic_region(self):
+        COLOR_RELIC_REGION = "#9b6fe0"
+        SCREENSHOT_WINDOW_CONFIG = {
+            'annotation_buttons': [
+                {'pos': (0.5, 0.5), 'size': 32, 'color': COLOR_RELIC_REGION, 'text': '点我并框出 遗物仪式界面 的区域'},
+            ],
+            'control_buttons': {
+                'cancel':   {'pos': (0.3, 0.5), 'size': 50, 'color': "#b3b3b3", 'text': '取消'},
+                'save':     {'pos': (0.3, 0.6), 'size': 50, 'color': "#ffffff", 'text': '保存'},
+            }
+        }
+        window = CaptureRegionWindow(SCREENSHOT_WINDOW_CONFIG, self.input)
+        region_result = window.capture_and_show()
+        if region_result is None:
+            warning("Relic region setting canceled")
+            return
+        if screenshot := window.screenshot_at_saving:
+            screenshot.save(get_appdata_path("relic_region_screenshot.jpg"))
+        for item in region_result:
+            if item['color'] == COLOR_RELIC_REGION:
+                self.relic_region = list(item['rect'])
+        self.update_relic_region()
+        self.save_settings()
+
+    def update_relic_region(self):
+        self.updater.relic_region = self.relic_region
+        info(f"Updated relic region: relic_region={self.relic_region}")
+        set_region_label(self.relic_region_label, self.relic_region)
+        self.clear_relic_region_button.setEnabled(self.relic_region is not None)
+        self.refresh_status()
+
+    def clear_relic_region(self):
+        self.relic_region = None
+        self.update_relic_region()
+        self.save_settings()
+
+    def show_relic_help(self):
+        msg = QMessageBox(self)
+        msg.setMaximumWidth(460)
+        msg.setWindowTitle("遗物仪式 / 词条数值")
+        layout: QVBoxLayout = QVBoxLayout()
+        layout.addWidget(QLabel(
+            "该功能通过截屏文字识别（OCR）读取遗物仪式界面里的遗物词条，\n"
+            "并把词条的具体数值（如“提升物理攻击力＋２”对应的“物理攻击力 +6%”）显示在词条文字的旁边。"))
+        layout.addWidget(QLabel("1. 勾选“启用遗物词条数值显示”，设置“框选遗物区域”的快捷键"))
+        layout.addWidget(QLabel("2. 在游戏里打开遗物仪式界面（能同时看到下方左右两块遗物描述的画面），按下快捷键"))
+        layout.addWidget(QLabel("3. 框选要识别的区域并保存：至少包含左右两块描述文字，也可以直接框选整个游戏画面"))
+        layout.addWidget(QLabel("4. 之后在遗物仪式里移动光标选中遗物，数值会自动显示在词条旁边；可在“显示位置”中选择下方或右侧"))
+        layout.addWidget(QLabel(
+            "说明：\n"
+            "· 太长的词条名在游戏里会折成两行，程序会自动合并后再识别\n"
+            "· 同名词条在深夜遗物和普通遗物上数值不同时（如“提升血量上限”），会同时列出两种\n"
+            "· 没有数值的词条（如“出击时，会持有……”）显示“暂无数值数据”\n"
+            "· 词条数值与武器信息是两套数据：同名词条在武器上和遗物上的数值并不一样\n"
+            "· 识别约需 1 秒，选中的遗物变化后会先隐藏旧数值再显示新结果"))
         msg.layout().addLayout(layout, 0, 0)
         msg.setStandardButtons(QMessageBox.StandardButton.Ok)
         msg.exec()

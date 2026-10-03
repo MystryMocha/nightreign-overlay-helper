@@ -26,7 +26,7 @@ _ROMAN = {"i": 1, "ii": 2, "iii": 3}
 # 武器名后面可能带的强化等级，识别时忽略
 _LEVEL_SUFFIX_RE = re.compile(r"\s*(?:\+\s*\d{1,2}|lv\.?\s*\d{1,2})\s*$")
 # 比对前直接删掉的标点和空白（OCR 经常多识别或漏识别这些字符）
-_STRIP_RE = re.compile(r"[\s·・•\-－—_:：,，.。、'\"“”‘’()（）\[\]【】<>《》|/\\!！?？~～]+")
+_STRIP_RE = re.compile(r"[\s·・•\-－—_:：,，.。、'\"“”‘’()（）\[\]【】<>《》|/\\!！?？~～※]+")
 _NUMBER_RE = re.compile(r"([+-]?\d+(?:\.\d+)?%?)")
 # 装备面板里战技 / 法术名前可能带的类别前缀：“战技：神圣刀刃”“魔法：辉石魔砾”
 _ACTION_PREFIX_RE = re.compile(r"^(?:战技|魔法|祷告)\s*[:：]\s*")
@@ -90,6 +90,7 @@ class NameIndex:
     """
     名称索引：把 OCR 识别出的一行文字匹配到已知名称
     依次尝试 完全一致 -> 包含（行内多出的字符数有限）-> 少量错字容忍；多个名称同样接近时视为无法确定
+    strict=True 时跳过“包含”这一步：折行合并出来的文字里，另一条词条的名字恰好被包含的概率更高，只认完全一致和少量错字
     """
     MIN_SUBSTRING_LEN = 3
 
@@ -103,7 +104,7 @@ class NameIndex:
         self._by_len: dict[int, list[str]] = {}
         for norm in self._norm_to_names:
             self._by_len.setdefault(len(norm), []).append(norm)
-        self._cache: dict[str, str | None] = {}
+        self._cache: dict[tuple[str, bool], str | None] = {}
 
     def __len__(self) -> int:
         return len(self._norm_to_names)
@@ -112,23 +113,29 @@ class NameIndex:
         names = self._norm_to_names[norm]
         return names[0] if len(set(names)) == 1 else None
 
-    def match(self, text: str) -> str | None:
-        if text in self._cache:
-            return self._cache[text]
-        result = self._match(normalize_text(text))
+    def exact(self, text: str) -> str | None:
+        """只认完全一致（忽略标点、空白和全半角）"""
+        norm = normalize_text(text)
+        return self._unique(norm) if norm in self._norm_to_names else None
+
+    def match(self, text: str, strict: bool = False) -> str | None:
+        key = (text, strict)
+        if key in self._cache:
+            return self._cache[key]
+        result = self._match(normalize_text(text), strict)
         if len(self._cache) > 2000:
             self._cache.clear()
-        self._cache[text] = result
+        self._cache[key] = result
         return result
 
-    def _match(self, t: str) -> str | None:
+    def _match(self, t: str, strict: bool = False) -> str | None:
         if len(t) < 2:
             return None
         if t in self._norm_to_names:
             return self._unique(t)
 
         # 行内包含完整名称（后面可能带强化等级、档位等少量多余字符）：取最长的
-        contained = [
+        contained = [] if strict else [
             norm for norm in self._norm_to_names
             if len(norm) >= self.MIN_SUBSTRING_LEN and norm in t
             and len(t) - len(norm) <= self.max_extra_chars

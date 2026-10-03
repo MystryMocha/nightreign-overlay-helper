@@ -74,7 +74,7 @@ hpbar_recent_length_count: 10         # 记录过去多少次血条长度，用�
 hpbar_low_hp_marker: 0.4              # 低血量触发被动标记位置
 hpbar_high_hp_marker: 0.85            # 高血量触发被动标记位置
 
-# 武器信息（属性补正/词条数值）：截取武器信息面板，OCR 识别武器名和词条名
+# 武器信息（属性补正/词条数值）：截取武器信息面板，OCR 识别武器名和词条名；遗物词条数值的识别也共用以下参数
 weapon_ocr_min_interval: 0.6    # 两次文字识别的最小间隔(秒)
 weapon_change_threshold: 0.004  # 截图区域内明显变化的像素占比超过此值才重新识别（0~1）
 weapon_hide_threshold: 0.05     # 已标注的文字行画面变化（平均灰度差 0~1）超过此值时先隐藏旧标注，等待新识别结果

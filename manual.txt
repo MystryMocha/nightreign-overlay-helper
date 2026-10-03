@@ -23,4 +23,5 @@ https://github.com/NeuraXmy/nightreign-overlay-helper
 感谢来自 https://github.com/Fuwishx 的地图解包数据
 感谢来自 https://space.bilibili.com/391379672 的大空洞水晶布局分享
 武器属性补正与词条数值整理自 https://github.com/sganggs/nightreign-relic-checker 的解包数据
+遗物词条数值来自 https://github.com/sganggs/nightreign-relic-checker 的词条库（说明整理自 https://github.com/xxiixi/NightreignQuickRef ）
 本程序禁止用于盈利目的
