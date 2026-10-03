@@ -502,6 +502,14 @@ class SettingsWindow(QWidget):
             "关闭时悬浮窗显示所有水晶点位，可用「下一个/上一个水晶布局」快捷键手动切换。"
         )))
 
+        self.boss_weakness_checkbox = QCheckBox("显示BOSS弱点和抗性")
+        self.boss_weakness_checkbox.setChecked(True)
+        self.boss_weakness_checkbox.stateChanged.connect(self.update_boss_weakness)
+        form.addRow(make_row(self.boss_weakness_checkbox, make_help_label(
+            "在地图信息中各BOSS名称下方显示其弱点(弱)和抗性(抗)，\n"
+            "数据整理自社区wiki，仅供参考。修改后下次识别地图时生效。"
+        )))
+
         # 地图区域
         self.map_region_group = QGroupBox("地图区域")
         region_form = make_form(self.map_region_group)
@@ -926,6 +934,7 @@ class SettingsWindow(QWidget):
             # HDR图像处理
             load_checkbox_state(self.hdr_processing_checkbox, data.get("hdr_processing_enabled", False))
             load_checkbox_state(self.crystal_auto_detect_checkbox, data.get("crystal_auto_detect_enabled", True))
+            load_checkbox_state(self.boss_weakness_checkbox, data.get("boss_weakness_enabled", True))
 
             info("Settings loaded successfully")
             loaded = True
@@ -1012,6 +1021,7 @@ class SettingsWindow(QWidget):
                 "debug_log_enabled": self.debug_log_checkbox.isChecked(),
                 "hdr_processing_enabled": self.hdr_processing_checkbox.isChecked(),
                 "crystal_auto_detect_enabled": self.crystal_auto_detect_checkbox.isChecked(),
+                "boss_weakness_enabled": self.boss_weakness_checkbox.isChecked(),
             }
             save_yaml(SETTINGS_SAVE_PATH, data)
             info(f"Saved settings to {SETTINGS_SAVE_PATH}")
@@ -1923,6 +1933,11 @@ class SettingsWindow(QWidget):
         except Exception as e:
             error(f"Failed to reset settings: {e}")
             error_box(f"恢复默认设置失败：{e}", self)
+
+    def update_boss_weakness(self, state):
+        enabled = self.boss_weakness_checkbox.isChecked()
+        self.updater.detector.map_detector.show_boss_weakness = enabled
+        info(f"Boss weakness display enabled: {enabled}")
 
     def update_crystal_auto_detect(self, state):
         enabled = self.crystal_auto_detect_checkbox.isChecked()

@@ -260,7 +260,9 @@ class MapDetector:
             get_data_path('csv/constructs.csv'),
             get_data_path('csv/names.csv'),
             get_data_path('csv/positions.csv'),
+            get_data_path('csv/boss_info.csv'),
         )
+        self.show_boss_weakness = True  # 是否在地图信息中显示BOSS弱点和抗性
 
         # 初始化地形识别用的SIFT特征
         self.sift = cv2.SIFT_create()
@@ -819,6 +821,12 @@ class MapDetector:
 
         EVENT_ICON = open_with_draw_size("icons/event.png", (45, 45))
 
+        WEAKNESS_COLOR = (255, 190, 120, 255)
+        show_weakness = self.show_boss_weakness
+
+        def get_weakness(name: str | None, with_resist: bool = True) -> str | None:
+            return self.info.get_weakness_text(name, with_resist) if show_weakness else None
+
         # 大空洞神授塔BOSS对应位置索引
         TGH_FLOOR_BOSS_POS_INDEX = {
             1111: ('RB', 1),
@@ -838,18 +846,34 @@ class MapDetector:
         name = get_name(pattern.day1_boss) or "未知BOSS"
         extra_name = get_name(pattern.day1_extra_boss) if pattern.day1_extra_boss != -1 else None
         icons.append(((x, y), NIGHT_CIRCLE_ICON))
-        texts.append(((x, y + scale_size(40)), f"Day1 {name}", FONT_SIZE_LARGE, (210, 210, 255, 255), OUTLINE_W_LARGE, OUTLINE_COLOR))
-        if extra_name: texts.append(((x, y + scale_size(60)), f"额外Boss:{extra_name}", 
-                                    FONT_SIZE_LARGE, (255, 255, 255, 255), OUTLINE_W_LARGE, OUTLINE_COLOR))
+        y += scale_size(40)
+        texts.append(((x, y), f"Day1 {name}", FONT_SIZE_LARGE, (210, 210, 255, 255), OUTLINE_W_LARGE, OUTLINE_COLOR))
+        if weakness := get_weakness(name):
+            y += scale_size(18)
+            texts.append(((x, y), weakness, FONT_SIZE_SMALL, WEAKNESS_COLOR, OUTLINE_W_SMALL, OUTLINE_COLOR))
+        if extra_name:
+            y += scale_size(20)
+            texts.append(((x, y), f"额外Boss:{extra_name}", FONT_SIZE_LARGE, (255, 255, 255, 255), OUTLINE_W_LARGE, OUTLINE_COLOR))
+            if weakness := get_weakness(extra_name):
+                y += scale_size(18)
+                texts.append(((x, y), weakness, FONT_SIZE_SMALL, WEAKNESS_COLOR, OUTLINE_W_SMALL, OUTLINE_COLOR))
 
         # day2 boss
         x, y = scale_size(pattern.day2_pos)
         name = get_name(pattern.day2_boss) or "未知BOSS"
         extra_name = get_name(pattern.day2_extra_boss) if pattern.day2_extra_boss != -1 else None
         icons.append(((x, y), NIGHT_CIRCLE_ICON))
-        texts.append(((x, y + scale_size(40)), f"Day2 {name}", FONT_SIZE_LARGE, (210, 210, 255, 255), OUTLINE_W_LARGE, OUTLINE_COLOR))
-        if extra_name: texts.append(((x, y + scale_size(60)), f"额外Boss:{extra_name}", 
-                                    FONT_SIZE_LARGE, (255, 255, 255, 255), OUTLINE_W_LARGE, OUTLINE_COLOR))
+        y += scale_size(40)
+        texts.append(((x, y), f"Day2 {name}", FONT_SIZE_LARGE, (210, 210, 255, 255), OUTLINE_W_LARGE, OUTLINE_COLOR))
+        if weakness := get_weakness(name):
+            y += scale_size(18)
+            texts.append(((x, y), weakness, FONT_SIZE_SMALL, WEAKNESS_COLOR, OUTLINE_W_SMALL, OUTLINE_COLOR))
+        if extra_name:
+            y += scale_size(20)
+            texts.append(((x, y), f"额外Boss:{extra_name}", FONT_SIZE_LARGE, (255, 255, 255, 255), OUTLINE_W_LARGE, OUTLINE_COLOR))
+            if weakness := get_weakness(extra_name):
+                y += scale_size(18)
+                texts.append(((x, y), weakness, FONT_SIZE_SMALL, WEAKNESS_COLOR, OUTLINE_W_SMALL, OUTLINE_COLOR))
             
         # 大空洞第二天缩圈位置
         day2_lefttop = pattern.day2_pos_idx == 12000
@@ -876,10 +900,13 @@ class MapDetector:
             # boss
             if match(45, 46) and not match(460) and (ctype == 45510 or ctype // 1000 != 45) and ctype not in (46780,):
                 name = get_name(ctype)
+                # 野外BOSS标注较密集，只显示弱点
+                weakness = get_weakness(self.info.get_name(ctype), with_resist=False)
                 if pos == MAIN_CASTLE_UPPERFLOOR_POS:   
                     y -= scale_size(10)
                     x += scale_size(13)
                     name = '楼顶:' + name
+                    weakness = None  # 楼顶名称上方是主城名称，没有空间
                 elif pos == MAIN_CASTLE_BASEMENT_POS:   
                     y += scale_size(10)
                     x -= scale_size(13)
@@ -893,6 +920,8 @@ class MapDetector:
                 color = (255, 255, 255, 255) if not construct.is_underground else (200, 200, 255, 255)
                 if name:
                     texts.append(((x, y), process_underground_name(name), FONT_SIZE_LARGE, color, OUTLINE_W_LARGE, OUTLINE_COLOR))
+                    if weakness:
+                        texts.append(((x, y + scale_size(17)), weakness, FONT_SIZE_SMALL, WEAKNESS_COLOR, OUTLINE_W_SMALL, OUTLINE_COLOR))
             
             # 主城类型
             if match(494) and ctype != 49400:

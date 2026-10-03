@@ -47,6 +47,7 @@ class MapInfo:
     pos_dict: dict[int, Position]
     tgh_pos_dict: dict[int, Position]
     patterns: list[MapPattern]
+    boss_weakness: dict[str, tuple[str, str]]  # BOSS名称 -> (弱点, 抗性)
 
     all_earth_shiftings: set[int]
     all_nightlords: set[int]
@@ -57,6 +58,18 @@ class MapInfo:
 
     def get_name(self, map_id: int) -> str:
         return self.name_dict.get(map_id)
+
+    def get_weakness_text(self, name: str | None, with_resist: bool = True) -> str | None:
+        """
+        返回BOSS弱点/抗性的简短文本，如 "弱:火/雷 抗:圣"，无数据时返回None
+        """
+        if not name or name not in self.boss_weakness:
+            return None
+        weak, resist = self.boss_weakness[name]
+        parts = []
+        if weak: parts.append(f"弱:{weak}")
+        if resist and with_resist: parts.append(f"抗:{resist}")
+        return " ".join(parts) or None
 
 
 def original_to_std_coord(p: tuple[float, float]) -> Position:
@@ -83,11 +96,18 @@ def load_map_info(
     constructs_csv_path: str,
     names_csv_path: str,
     positions_csv_path: str,
+    boss_info_csv_path: str | None = None,
 ):
     with open(names_csv_path, 'r', encoding='utf-8') as f:
         f.readline()
         reader = csv.reader(f)
         name_dict = {int(row[0]): row[1] for row in reader}
+
+    boss_weakness: dict[str, tuple[str, str]] = {}
+    if boss_info_csv_path is not None:
+        with open(boss_info_csv_path, 'r', encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                boss_weakness[row['name']] = (row['weak'].strip(), row['resist'].strip())
 
     with open(positions_csv_path, 'r', encoding='utf-8') as f:
         f.readline()
@@ -183,6 +203,7 @@ def load_map_info(
         pos_dict=pos_dict,
         tgh_pos_dict=tgh_pos_dict,
         patterns=patterns,
+        boss_weakness=boss_weakness,
         all_earth_shiftings=all_earth_shiftings,
         all_nightlords=all_nightlords,
         all_poi_pos=all_poi_pos,
