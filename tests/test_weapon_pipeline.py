@@ -200,3 +200,59 @@ class TestLayout:
         next_line = (348, 176, 241, 24)
         rect = place_annotation(anchor, (375, 37), POSITION_BELOW, [next_line], (0, 0, 800, 800))
         assert not intersects(rect, anchor)
+
+
+def make_seal_info() -> WeaponInfo:
+    return WeaponInfo({
+        "weapons": {
+            "爪痕圣印记": {"type": "圣印记", "rarity": "优良", "correct": [0, 0, 0, 100, 0], "id": 34040000,
+                           "caster": True},
+            "隐士的手杖": {"type": "辉石魔杖", "rarity": "普通", "correct": [0, 0, 100, 0, 0],
+                           "id": 33750000, "caster": True},
+        },
+        "spells": {
+            "兽石": {"id": 6800, "text": "FP 7 · 物理 87"},
+            "辉石魔砾": {"id": 4000, "text": "FP 7 · 魔力 152"},
+            "恢复": {"id": 6421, "text": None},
+        },
+    })
+
+
+def spell_texts(lines):
+    anns, _ = build_annotations(lines, make_seal_info(), origin=(0, 0))
+    return [(a.name, a.text) for a in anns if a.kind == "spell"]
+
+
+class TestSpellScaling:
+    def test_prayer_damage_uses_incantation_scaling(self):
+        lines = [line("爪痕圣印记＋１", 10, 10), line("祷告加成", 10, 60, w=120), line("220", 400, 62, w=60),
+                 line("兽石", 10, 200)]
+        assert spell_texts(lines) == [("兽石", "FP 7 · 物理 191（加成 220）")]
+
+    def test_scaling_recognized_with_label(self):
+        lines = [line("爪痕圣印记", 10, 10), line("祷告加成 220", 10, 60), line("兽石", 10, 200)]
+        assert spell_texts(lines) == [("兽石", "FP 7 · 物理 191（加成 220）")]
+
+    def test_without_scaling_shows_base_values(self):
+        assert spell_texts([line("爪痕圣印记", 10, 10), line("兽石", 10, 200)]) == [("兽石", "FP 7 · 物理 87")]
+
+    def test_sorcery_does_not_use_incantation_scaling(self):
+        lines = [line("隐士的手杖", 10, 10), line("祷告加成", 10, 60, w=120), line("220", 400, 62, w=60),
+                 line("魔法加成", 10, 100, w=120), line("150", 400, 102, w=60), line("辉石魔砾", 10, 200)]
+        assert spell_texts(lines) == [("辉石魔砾", "FP 7 · 魔力 228（加成 150）")]
+
+    def test_value_on_another_row_is_ignored(self):
+        lines = [line("爪痕圣印记", 10, 10), line("祷告加成", 10, 60, w=120), line("176", 400, 140, w=60),
+                 line("兽石", 10, 200)]
+        assert spell_texts(lines) == [("兽石", "FP 7 · 物理 87")]
+
+    def test_spell_without_damage_is_unchanged(self):
+        lines = [line("爪痕圣印记", 10, 10), line("祷告加成 220", 10, 60), line("恢复", 10, 200)]
+        assert spell_texts(lines) == [("恢复", NO_DATA_TEXT)]
+
+    def test_each_column_uses_its_own_scaling(self):
+        lines = [line("爪痕圣印记", 10, 10), line("爪痕圣印记", 900, 10),
+                 line("祷告加成", 10, 60, w=120), line("200", 300, 62, w=60),
+                 line("祷告加成", 900, 60, w=120), line("300", 1200, 62, w=60),
+                 line("兽石", 10, 200), line("兽石", 900, 200)]
+        assert spell_texts(lines) == [("兽石", "FP 7 · 物理 174（加成 200）"), ("兽石", "FP 7 · 物理 261（加成 300）")]

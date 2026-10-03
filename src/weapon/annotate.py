@@ -1,14 +1,20 @@
 """
 把 OCR 识别出的文字行匹配到武器/词条/战技/法术，生成要显示在对应文字旁边的标注（纯逻辑，不依赖 Qt / OpenCV）
 """
+import re
 from dataclasses import dataclass
 
-from src.weapon.info import SkillLookup, SpellLookup, WeaponInfo, WeaponLookup, normalize_text
+from src.weapon.info import (
+    SPELL_SCALING_LABELS, SkillLookup, SpellLookup, WeaponInfo, WeaponLookup, normalize_text,
+)
 from src.weapon.ocr import OcrLine
 
 Rect = tuple[int, int, int, int]    # x, y, w, h
 
 NO_DATA_TEXT = "暂无数值数据"
+
+_SCALING_VALUE_RE = re.compile(r"^\d{2,3}$")
+_SCALING_INLINE_RE = re.compile(r"(\d{2,3})$")
 
 
 @dataclass
@@ -35,8 +41,43 @@ def _nearest_weapon(weapons: list[tuple[Rect, WeaponLookup]], box: Rect) -> Weap
     return min(above or weapons, key=lambda item: abs(item[0][1] - box[1]) + 2 * abs(item[0][0] - box[0]))[1]
 
 
+def _find_spell_scalings(entries: list[tuple[str, Rect]]) -> list[tuple[Rect, str, int]]:
+    """
+    面板上的“魔法加成 / 祷告加成”及其数值，返回 [(标签位置, 法术种类, 加成)]
+    数值通常被识别成标签同一行右侧单独的一行，也可能和标签连在一起（“祷告加成220”）
+    """
+    found: list[tuple[Rect, str, int]] = []
+    for text, box in entries:
+        norm = normalize_text(text)
+        kind = next((k for k, label in SPELL_SCALING_LABELS.items() if label in norm), None)
+        if kind is None:
+            continue
+        if m := _SCALING_INLINE_RE.search(norm):
+            found.append((box, kind, int(m.group(1))))
+            continue
+        center = box[1] + box[3] / 2
+        values = [
+            (other[0] - (box[0] + box[2]), int(normalize_text(t)))
+            for t, other in entries
+            if _SCALING_VALUE_RE.match(normalize_text(t)) and other[0] >= box[0] + box[2] - 4
+            and abs(other[1] + other[3] / 2 - center) <= max(box[3], other[3]) * 0.6
+        ]
+        if values:
+            found.append((box, kind, min(values)[1]))
+    return found
+
+
+def _nearest_scaling(scalings: list[tuple[Rect, str, int]], kind: str, box: Rect) -> int | None:
+    """法术所属施法器的加成：与 _nearest_weapon 一样优先取同一列、上方最近的"""
+    same = [(rect, value) for rect, k, value in scalings if k == kind]
+    if not same:
+        return None
+    above = [item for item in same if item[0][1] <= box[1] + 4]
+    return min(above or same, key=lambda item: abs(item[0][1] - box[1]) + 2 * abs(item[0][0] - box[0]))[1]
+
+
 def _action_annotation(text: str, box: Rect, skill: SkillLookup | None, spell: SpellLookup | None,
-                       weapon: WeaponLookup | None) -> WeaponAnnotation | None:
+                       weapon: WeaponLookup | None, spell_scaling: int | None = None) -> WeaponAnnotation | None:
     """
     战技和法术可能同名（如“辉石魔砾”）：行首有“战技：”“魔法：”前缀时按前缀，
     否则按上方武器是不是施法器；找不到武器时两个摘要都显示
@@ -49,12 +90,12 @@ def _action_annotation(text: str, box: Rect, skill: SkillLookup | None, spell: S
     if skill is not None and spell is not None and not prefer_skill and not prefer_spell:
         if weapon is None:
             skill_text, skill_dim = _shown(skill.text_for(None))
-            spell_text, spell_dim = _shown(spell.text)
+            spell_text, spell_dim = _shown(spell.text_with_scaling(spell_scaling))
             return WeaponAnnotation("mixed", skill.name, f"战技：{skill_text} · 法术：{spell_text}", box,
                                     dim=skill_dim and spell_dim)
         prefer_spell, prefer_skill = weapon.caster, not weapon.caster
     if spell is not None and (prefer_spell or skill is None):
-        shown, dim = _shown(spell.text)
+        shown, dim = _shown(spell.text_with_scaling(spell_scaling))
         return WeaponAnnotation("spell", spell.name, shown, box, dim=dim)
     shown, dim = _shown(skill.text_for(weapon.id if weapon is not None else None))
     return WeaponAnnotation("skill", skill.name, shown, box, dim=dim)
@@ -113,9 +154,13 @@ def build_annotations(
         pending.append((line.text, box))
 
     # 战技 / 法术要按上方的武器挑选动作，所以等武器都找到后再处理
+    # 法术伤害按所在施法器面板上的“魔法加成 / 祷告加成”换算
+    scalings = _find_spell_scalings(pending)
     for text, box in pending:
+        spell = info.lookup_spell(text)
+        scaling = _nearest_scaling(scalings, spell.kind, box) if spell is not None else None
         annotation = _action_annotation(
-            text, box, info.lookup_skill(text), info.lookup_spell(text), _nearest_weapon(weapons, box))
+            text, box, info.lookup_skill(text), spell, _nearest_weapon(weapons, box), scaling)
         if annotation is not None:
             annotations.append(annotation)
 

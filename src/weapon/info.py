@@ -312,6 +312,30 @@ class SpellLookup:
     id: int
     text: str | None
 
+    @property
+    def kind(self) -> str:
+        """SPELL_SORCERY 魔法（id 4000~5999）/ SPELL_INCANTATION 祷告（id 6000 起）"""
+        return SPELL_INCANTATION if self.id >= 6000 else SPELL_SORCERY
+
+    def text_with_scaling(self, scaling: int | None) -> str | None:
+        """
+        按施法器的“魔法加成 / 祷告加成”换算伤害：法术伤害 = 法术基础值 × 加成 / 100
+        （未计敌人防御、减伤和其他增伤效果）；没有加成数值时返回基础值文案
+        """
+        if not self.text or not scaling:
+            return self.text
+        scaled = _SPELL_DAMAGE_RE.sub(lambda m: f"{m.group(1)} {int(m.group(2)) * scaling // 100}", self.text)
+        if scaled == self.text:     # 没有伤害数值可以换算
+            return self.text
+        return f"{scaled}（加成 {scaling}）"
+
+
+SPELL_SORCERY = "sorcery"
+SPELL_INCANTATION = "incantation"
+SPELL_SCALING_LABELS = {SPELL_SORCERY: "魔法加成", SPELL_INCANTATION: "祷告加成"}
+# 法术文案里的固定伤害：“物理 87”“100% 雷电 234”中的 87、234（不含“50%”这类倍率）
+_SPELL_DAMAGE_RE = re.compile(r"(物理|魔力|火焰|雷电|圣) (\d+)(?![\d%])")
+
 
 def strip_action_prefix(text: str) -> str:
     return _ACTION_PREFIX_RE.sub("", text.strip(), count=1)

@@ -299,3 +299,14 @@ class TestRealData:
         skill = self.info.lookup_skill("不可挡之刃")
         texts = {skill.text_for(weapon_id) for weapon_id in (*skill.by_weapon, None)}
         assert texts == {"250%+基础", "297%"}
+
+
+def test_spell_text_with_scaling():
+    from src.weapon.info import SPELL_INCANTATION, SPELL_SORCERY, SpellLookup
+    spell = SpellLookup("雷电枪", 6900, "FP 18 · 100% 雷电 234 / 100% 雷电 50")
+    assert spell.kind == SPELL_INCANTATION
+    assert spell.text_with_scaling(200) == "FP 18 · 100% 雷电 468 / 100% 雷电 100（加成 200）"
+    assert spell.text_with_scaling(None) == spell.text
+    multi = SpellLookup("投火", 6010, "FP 11 · 火焰 213×2 / 50% 火焰 115")
+    assert multi.text_with_scaling(150) == "FP 11 · 火焰 319×2 / 50% 火焰 172（加成 150）"
+    assert SpellLookup("辉石魔砾", 4000, "FP 7 · 魔力 152").kind == SPELL_SORCERY
