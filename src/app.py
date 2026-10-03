@@ -129,8 +129,9 @@ if __name__ == "__main__":
     map_overlay = MapOverlayWidget()
     hp_overlay = HpOverlayWidget()
     weapon_overlay = WeaponOverlayWidget()
+    relic_overlay = WeaponOverlayWidget()    # 遗物词条数值与武器信息用同一种“文字旁标注”悬浮窗，各自独立显示
 
-    updater = Updater(input_worker, overlay, map_overlay, hp_overlay, weapon_overlay)
+    updater = Updater(input_worker, overlay, map_overlay, hp_overlay, weapon_overlay, relic_overlay)
     settings_window = SettingsWindow(overlay, map_overlay, updater, input_worker)
     
     # 创建系统托盘图标和菜单
@@ -188,12 +189,14 @@ if __name__ == "__main__":
         overlay.is_menu_opened = True
         map_overlay.is_menu_opened = True
         weapon_overlay.is_menu_opened = True
+        relic_overlay.is_menu_opened = True
         updater.is_menu_opened = True
         # info("Menu opened")
     def on_menu_hide():
         overlay.is_menu_opened = False
         map_overlay.is_menu_opened = False
         weapon_overlay.is_menu_opened = False
+        relic_overlay.is_menu_opened = False
         updater.is_menu_opened = False
         # info("Menu closed")
 

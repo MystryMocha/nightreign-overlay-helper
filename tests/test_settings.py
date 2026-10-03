@@ -25,7 +25,7 @@ def make_window(qapp, monkeypatch):
         if settings_text is not None:
             with open(SETTINGS_SAVE_PATH, "w", encoding="utf-8") as f:
                 f.write(settings_text)
-        updater = updater_module.Updater(MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock())
+        updater = updater_module.Updater(*(MagicMock() for _ in range(6)))
         window = SettingsWindow(OverlayWidget(), MapOverlayWidget(), updater, InputWorker())
         windows.append(window)
         return window, updater
@@ -196,3 +196,90 @@ def test_weapon_ocr_error_is_reported_in_settings(make_window):
     updater.weapon_status_signal.emit("")
     assert window.weapon_status_label.text() == ""
     assert "识别组件不可用" not in window.status_labels[4].text()
+
+
+def test_relic_affix_defaults(make_window):
+    window, updater = make_window()
+    assert updater.relic_detect_enabled is False and updater.relic_region is None
+    assert window.relic_position_combobox.currentText() == "词条下方"
+    assert window.relic_font_scale_slider.value() == 100
+
+
+def test_relic_affix_settings_are_applied_and_saved(make_window):
+    window, updater = make_window(yaml.safe_dump({
+        "relic_detect_enabled": True,
+        "relic_region": [10, 20, 300, 200],
+        "relic_position": "词条右侧",
+        "relic_font_scale": 130,
+    }))
+    assert updater.relic_detect_enabled is True
+    assert updater.relic_region == [10, 20, 300, 200]
+    states = []
+    updater.relic_overlay_ui_state_signal.connect(states.append)
+    window.relic_position_combobox.setCurrentText("词条下方")
+    window.relic_font_scale_slider.setValue(80)
+    assert [s.position for s in states if s.position] == ["below"]
+    assert [s.font_scale for s in states if s.font_scale] == [0.8]
+
+    window.save_settings()
+    with open(make_window.path, encoding="utf-8") as f:
+        saved = yaml.safe_load(f)
+    assert saved["relic_detect_enabled"] is True
+    assert saved["relic_region"] == [10, 20, 300, 200]
+    assert saved["relic_position"] == "词条下方" and saved["relic_font_scale"] == 80
+
+
+def test_relic_and_weapon_settings_are_independent(make_window):
+    window, updater = make_window(yaml.safe_dump({
+        "weapon_detect_enabled": True, "weapon_region": [1, 2, 3, 4], "weapon_font_scale": 150,
+        "relic_detect_enabled": False, "relic_region": [5, 6, 7, 8], "relic_font_scale": 70,
+    }))
+    assert updater.weapon_detect_enabled is True and updater.relic_detect_enabled is False
+    assert updater.weapon_region == [1, 2, 3, 4] and updater.relic_region == [5, 6, 7, 8]
+    weapon_states, relic_states = [], []
+    updater.weapon_overlay_ui_state_signal.connect(weapon_states.append)
+    updater.relic_overlay_ui_state_signal.connect(relic_states.append)
+    window.relic_font_scale_slider.setValue(90)
+    assert [s.font_scale for s in relic_states if s.font_scale] == [0.9] and not weapon_states
+    window.weapon_font_scale_slider.setValue(110)
+    assert [s.font_scale for s in weapon_states if s.font_scale] == [1.1]
+    assert [s.font_scale for s in relic_states if s.font_scale] == [0.9]
+
+
+def test_invalid_relic_settings_are_ignored(make_window):
+    window, updater = make_window(yaml.safe_dump({
+        "relic_region": [1, 2, "a", 4], "relic_font_scale": "huge", "relic_position": "somewhere",
+        "hpbar_region": [1, 2, 3, 4],
+    }))
+    assert updater.relic_region is None
+    assert window.relic_font_scale_slider.value() == 100
+    assert window.relic_position_combobox.currentText() == "词条下方"
+    assert updater.hpbar_region == [1, 2, 3, 4]         # 排在后面的设置不受影响
+    assert not os.path.exists(make_window.path + ".load_failed.bak")
+
+
+def test_clearing_relic_region_updates_updater(make_window):
+    window, updater = make_window(yaml.safe_dump({"relic_region": [10, 20, 300, 200]}))
+    window.clear_relic_region()
+    assert updater.relic_region is None and not window.clear_relic_region_button.isEnabled()
+
+
+def test_relic_ocr_error_is_reported_in_settings(make_window):
+    window, updater = make_window(yaml.safe_dump({"relic_detect_enabled": True, "relic_region": [1, 2, 3, 4]}))
+    relic_label = next(label for label in window.status_labels if "遗物词条" in label.text())
+    assert "就绪" in relic_label.text()
+    updater.relic_status_signal.emit("ImportError: boom")
+    assert "ImportError: boom" in window.relic_status_label.text()
+    assert "识别组件不可用" in relic_label.text()
+    assert window.weapon_status_label.text() == ""      # 武器信息的状态不受影响
+    updater.relic_status_signal.emit("")
+    assert window.relic_status_label.text() == ""
+    assert "识别组件不可用" not in relic_label.text()
+
+
+def test_relic_hotkeys_are_registered_for_conflict_detection(make_window):
+    window, _ = make_window()
+    names = [name for name, _ in window.hotkey_widgets]
+    assert "框选遗物区域" in names and "显示/隐藏遗物数值" in names
+    assert len(names) == len(set(names))
+

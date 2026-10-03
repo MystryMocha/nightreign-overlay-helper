@@ -24,6 +24,37 @@ class WeaponAnnotation:
     text: str       # 要显示的文案
     box: Rect       # 被识别文字行在屏幕上的位置（与截图区域相同的坐标系）
     dim: bool = False   # 数据里没有数值，只提示“已识别”
+    line_height: int = 0    # 单行文字的高度，0 表示就是 box 的高度；词条名折成多行时 box 是整块文字，字号要按单行算
+
+
+def screen_lines(
+    lines: list[OcrLine],
+    origin: tuple[int, int],
+    scale: float = 1.0,
+    min_score: float = 0.5,
+    ignore_texts: set[str] | None = None,
+) -> list[tuple[OcrLine, Rect]]:
+    """
+    OCR 文字行 -> (文字行, 在屏幕上的位置)，丢掉置信度太低的行和本程序自己画上去的标注文字
+
+    Args:
+        lines: OCR 文字行，坐标相对送去识别的图像
+        origin: 识别图像左上角对应的屏幕坐标
+        scale: 送去识别的图像相对屏幕的缩放（<1 表示识别前缩小过）
+        ignore_texts: 要忽略的文字（截图方式可能截到悬浮窗，自己画的标注不能当作游戏文字）
+    """
+    ignored = {normalize_text(t) for t in (ignore_texts or set()) if len(normalize_text(t)) >= 4}
+    ox, oy = origin
+    kept: list[tuple[OcrLine, Rect]] = []
+    for line in lines:
+        if line.score < min_score:
+            continue
+        norm = normalize_text(line.text)
+        if any(norm == t or (len(norm) >= 4 and norm in t) or t in norm for t in ignored):
+            continue
+        x, y, w, h = line.box
+        kept.append((line, (ox + int(x / scale), oy + int(y / scale), max(1, int(w / scale)), max(1, int(h / scale)))))
+    return kept
 
 
 def _shown(text: str | None) -> tuple[str, bool]:
@@ -110,33 +141,19 @@ def build_annotations(
     ignore_texts: set[str] | None = None,
 ) -> tuple[list[WeaponAnnotation], list[Rect]]:
     """
-    Args:
-        lines: OCR 文字行，坐标相对送去识别的图像
-        origin: 识别图像左上角对应的屏幕坐标
-        scale: 送去识别的图像相对屏幕的缩放（<1 表示识别前缩小过）
-        ignore_texts: 要忽略的文字（本程序自己画上去的标注，截图方式可能截到悬浮窗）
+    参数含义见 screen_lines
 
     Returns:
         (标注列表, 所有文字行在屏幕上的位置——用于标注布局时避开其他文字)
     """
-    ignored = {normalize_text(t) for t in (ignore_texts or set()) if len(normalize_text(t)) >= 4}
-    ox, oy = origin
+    kept = screen_lines(lines, origin, scale, min_score, ignore_texts)
+    line_boxes = [box for _, box in kept]
     annotations: list[WeaponAnnotation] = []
-    line_boxes: list[Rect] = []
     weapons: list[tuple[Rect, WeaponLookup]] = []
     pending: list[tuple[str, Rect]] = []    # 不是武器也不是词条的行，可能是战技 / 法术名
 
-    for line in lines:
-        if line.score < min_score:
-            continue
-        norm = normalize_text(line.text)
+    for line, box in kept:
         # 注意不按名称去重：对比面板里两把武器可能带同名词条，各自都要有标注
-        if any(norm == t or (len(norm) >= 4 and norm in t) or t in norm for t in ignored):
-            continue
-        x, y, w, h = line.box
-        box = (ox + int(x / scale), oy + int(y / scale), max(1, int(w / scale)), max(1, int(h / scale)))
-        line_boxes.append(box)
-
         affix = info.lookup_affix(line.text)
         if affix is not None:
             if affix.has_values:

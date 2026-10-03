@@ -12,7 +12,7 @@ from src.screencap import ScreencapEngine
 from src.weapon.annotate import WeaponAnnotation, build_annotations
 from src.weapon.info import get_weapon_info
 from src.weapon.layout import Rect
-from src.weapon.ocr import OcrEngine
+from src.weapon.ocr import OcrEngine, OcrLine, get_shared_ocr
 
 THUMB_SIZE = (160, 96)
 CHANGED_PIXEL_DELTA = 38    # 灰度差超过 38/255（约 0.15）的像素算“明显变化”
@@ -57,7 +57,7 @@ class WeaponDetectResult:
 
 
 @dataclass
-class _Job:
+class OcrJob:
     generation: int
     image: np.ndarray
     scale: float
@@ -72,7 +72,10 @@ class WeaponDetector:
 
     OCR 一次要几百毫秒到一秒多，所以放在后台线程里跑，detect() 本身只截图、判断画面是否变化并取回最新结果，
     不会阻塞其他检测。画面没有变化时不重复识别。
+
+    “识别出的文字行 -> 标注”这一步由 _annotate 决定，子类（遗物词条识别）只需要换掉这一步。
     """
+    name = "Weapon"     # 用于日志和线程名
 
     def __init__(self):
         self.ocr: OcrEngine | None = None
@@ -81,7 +84,7 @@ class WeaponDetector:
         self._stop = False
         self._thread: threading.Thread | None = None
 
-        self._job: _Job | None = None
+        self._job: OcrJob | None = None
         self._busy = False
         self._generation = 0
         # (generation, 标注, 文字行位置, OCR 错误, 被识别画面的灰度图)
@@ -176,20 +179,26 @@ class WeaponDetector:
         if scale < 1.0:
             img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
         with self._lock:
-            self._job = _Job(self._generation, img, scale, (region[0], region[1]), set(ignore_texts), gray)
+            self._job = OcrJob(self._generation, img, scale, (region[0], region[1]), set(ignore_texts), gray)
             self._busy = True
         self._last_thumb = thumb
         self._last_submit_time = time.time()
         if self.ocr is None:
-            self.ocr = OcrEngine(threads=config.weapon_ocr_threads)
+            self.ocr = get_shared_ocr(threads=config.weapon_ocr_threads)
         if self._thread is None or not self._thread.is_alive():
             self._stop = False
-            self._thread = threading.Thread(target=self._worker, name="WeaponOcr", daemon=True)
+            self._thread = threading.Thread(target=self._worker, name=f"{self.name}Ocr", daemon=True)
             self._thread.start()
         self._wake.set()
 
+    def _annotate(self, lines: list[OcrLine], job: OcrJob, config: Config) -> tuple[list[WeaponAnnotation], list[Rect]]:
+        return build_annotations(
+            lines, get_weapon_info(), job.origin, job.scale,
+            min_score=config.weapon_ocr_min_score, ignore_texts=job.ignore_texts,
+        )
+
     def _worker(self):
-        info("Weapon OCR worker started.")
+        info(f"{self.name} OCR worker started.")
         while not self._stop:
             self._wake.wait()
             self._wake.clear()
@@ -205,16 +214,13 @@ class WeaponDetector:
                 t = time.time()
                 config = Config.get()
                 lines = self.ocr.recognize(job.image)
-                annotations, line_boxes = build_annotations(
-                    lines, get_weapon_info(), job.origin, job.scale,
-                    min_score=config.weapon_ocr_min_score, ignore_texts=job.ignore_texts,
-                )
-                debug(f"WeaponDetector: {len(lines)} lines, {len(annotations)} annotations, "
+                annotations, line_boxes = self._annotate(lines, job, config)
+                debug(f"{self.name}Detector: {len(lines)} lines, {len(annotations)} annotations, "
                       f"time={time.time() - t:.3f}s")
             except Exception as e:
-                error(f"Weapon OCR failed: {type(e).__name__}: {e}")
+                error(f"{self.name} OCR failed: {type(e).__name__}: {e}")
             with self._lock:
                 self._result = (job.generation, annotations, line_boxes, self.ocr.error, job.gray)
                 self._result_version += 1
                 self._busy = False
-        info("Weapon OCR worker stopped.")
+        info(f"{self.name} OCR worker stopped.")

@@ -67,3 +67,20 @@ class OcrEngine:
             lines.append(OcrLine(text=text, box=(x, y, int(max(xs)) - x, int(max(ys)) - y), score=float(score)))
         lines.sort(key=lambda l: (l.box[1], l.box[0]))
         return lines
+
+
+_shared_engine: OcrEngine | None = None
+_shared_lock = threading.Lock()
+
+
+def get_shared_ocr(threads: int = 2) -> OcrEngine:
+    """
+    进程内共用的 OCR 引擎：武器信息和遗物词条两个检测器各有一个识别线程，
+    共用一份模型比各加载一份省 30MB 内存（识别时引擎内部加锁，两边的识别会排队，不会同时占用 CPU）。
+    线程数以第一次创建时为准
+    """
+    global _shared_engine
+    with _shared_lock:
+        if _shared_engine is None:
+            _shared_engine = OcrEngine(threads=threads)
+        return _shared_engine

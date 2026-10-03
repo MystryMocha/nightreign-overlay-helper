@@ -1,6 +1,7 @@
 from PyQt6.QtCore import QObject, pyqtSignal
 import time
 from enum import Enum
+from dataclasses import dataclass, field
 from PIL import Image
 
 from src.common import GAME_WINDOW_TITLE, GAME_PROCESS_NAME
@@ -51,12 +52,22 @@ def format_period(seconds: int) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+@dataclass
+class _PanelState:
+    """一个“识别面板文字 -> 悬浮标注”功能（武器信息 / 遗物词条）在检测线程里记住的显示状态"""
+    stale: bool | None = None           # 当前通知给悬浮窗的“旧标注已过期”状态
+    ocr_error: str | None = None        # 当前通知给设置界面的文字识别组件错误
+    own_texts: set[str] = field(default_factory=set)    # 悬浮窗正在显示的文案，识别时忽略，避免截到自己画的字
+
+
 class Updater(QObject):
     update_overlay_ui_state_signal = pyqtSignal(OverlayUIState)
     update_map_overlay_ui_state_signal = pyqtSignal(MapOverlayUIState)
     hp_overlay_ui_state_signal = pyqtSignal(HpOverlayUIState)
     weapon_overlay_ui_state_signal = pyqtSignal(WeaponOverlayUIState)
     weapon_status_signal = pyqtSignal(str)     # 武器信息的文字识别组件状态，空字符串表示正常，否则为错误原因
+    relic_overlay_ui_state_signal = pyqtSignal(WeaponOverlayUIState)    # 遗物词条与武器信息用同一种悬浮窗
+    relic_status_signal = pyqtSignal(str)      # 遗物词条的文字识别组件状态，含义同上
 
     def __init__(
         self, 
@@ -65,6 +76,7 @@ class Updater(QObject):
         map_overlay: MapOverlayWidget,
         hp_overlay: HpOverlayWidget,
         weapon_overlay: WeaponOverlayWidget,
+        relic_overlay: WeaponOverlayWidget,
     ):
         super().__init__()
         self._running = False
@@ -129,9 +141,14 @@ class Updater(QObject):
         self.weapon_detect_enabled: bool = False
         self.weapon_region: tuple[int] = None
         self.weapon_overlay_visible: bool = True
-        self._weapon_stale: bool | None = None
-        self._weapon_ocr_error: str | None = None
-        self._weapon_own_texts: set[str] = set()    # 悬浮窗正在显示的文案，识别时忽略，避免截到自己画的字
+        self._weapon_panel = _PanelState()
+
+        self.relic_overlay = relic_overlay
+        self.relic_overlay_ui_state_signal.connect(self.relic_overlay.update_ui_state)
+        self.relic_detect_enabled: bool = False
+        self.relic_region: tuple[int] = None
+        self.relic_overlay_visible: bool = True
+        self._relic_panel = _PanelState()
 
         self.art_detect_enabled: bool = False
         self.to_detect_art_time: float = 0.0
@@ -657,45 +674,70 @@ class Updater(QObject):
         info(f"Weapon overlay visible: {self.weapon_overlay_visible}")
 
     def detect_and_update_weapon(self):
-        if not self.weapon_detect_enabled or self.weapon_region is None:
+        self._detect_and_update_panel(
+            "Weapon info", self.weapon_detect_enabled, self.weapon_region, self._weapon_panel,
+            lambda region, ignore_texts: self.detector.detect(DetectParam(
+                weapon_detect_param=WeaponDetectParam(
+                    region=region, hdr_processing_enabled=self.hdr_processing_enabled, ignore_texts=ignore_texts)
+            )).weapon_detect_result,
+            self.weapon_overlay_ui_state_signal, self.weapon_status_signal,
+        )
+
+    def _detect_and_update_panel(self, label: str, enabled: bool, region, panel: _PanelState, detect,
+                                 overlay_signal, status_signal):
+        """
+        武器信息和遗物词条共用：截取面板区域识别文字，并把标注、过期状态、识别组件错误通知出去
+
+        Args:
+            detect: detect(region, ignore_texts) -> 对应检测器的结果（region 为 None 表示清除已显示的标注）
+        """
+        if not enabled or region is None:
             # 功能关闭或区域被清除：让检测器清掉已显示的标注（只会通知一次）
-            result = self.detector.detect(DetectParam(weapon_detect_param=WeaponDetectParam(region=None)))
-            if result.weapon_detect_result.updated:
-                self._weapon_own_texts = set()
-                self._weapon_stale = None
-                self.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(
-                    annotations=[], line_boxes=[], stale=False,
-                ))
+            if detect(None, set()).updated:
+                panel.own_texts = set()
+                panel.stale = None
+                overlay_signal.emit(WeaponOverlayUIState(annotations=[], line_boxes=[], stale=False))
             return
 
-        region = tuple(self.weapon_region)
-        result = self.detector.detect(DetectParam(
-            weapon_detect_param=WeaponDetectParam(
-                region=region,
-                hdr_processing_enabled=self.hdr_processing_enabled,
-                ignore_texts=self._weapon_own_texts,
-            )
-        )).weapon_detect_result
+        region = tuple(region)
+        result = detect(region, panel.own_texts)
 
         state = WeaponOverlayUIState()
         changed = False
         if result.updated:
-            self._weapon_own_texts = {a.text for a in result.annotations}
+            panel.own_texts = {a.text for a in result.annotations}
             state.annotations = result.annotations
             state.line_boxes = result.line_boxes
             state.region = region
             changed = True
-            info(f"Weapon info updated: {[(a.name, a.text) for a in result.annotations]}")
+            info(f"{label} updated: {[(a.name, a.text) for a in result.annotations]}")
             error_text = result.ocr_error or ""
-            if error_text != (self._weapon_ocr_error or ""):
-                self._weapon_ocr_error = error_text
-                self.weapon_status_signal.emit(error_text)
-        if result.stale != self._weapon_stale:
-            self._weapon_stale = result.stale
+            if error_text != (panel.ocr_error or ""):
+                panel.ocr_error = error_text
+                status_signal.emit(error_text)
+        if result.stale != panel.stale:
+            panel.stale = result.stale
             state.stale = result.stale
             changed = True
         if changed:
-            self.weapon_overlay_ui_state_signal.emit(state)
+            overlay_signal.emit(state)
+
+    # =============== Relic Affix Management =============== #
+
+    def toggle_relic_overlay_by_shortcut(self):
+        self.relic_overlay_visible = not self.relic_overlay_visible
+        self.relic_overlay_ui_state_signal.emit(WeaponOverlayUIState(visible=self.relic_overlay_visible))
+        info(f"Relic overlay visible: {self.relic_overlay_visible}")
+
+    def detect_and_update_relic(self):
+        self._detect_and_update_panel(
+            "Relic affix", self.relic_detect_enabled, self.relic_region, self._relic_panel,
+            lambda region, ignore_texts: self.detector.detect(DetectParam(
+                relic_detect_param=WeaponDetectParam(
+                    region=region, hdr_processing_enabled=self.hdr_processing_enabled, ignore_texts=ignore_texts)
+            )).relic_detect_result,
+            self.relic_overlay_ui_state_signal, self.relic_status_signal,
+        )
 
     # =============== Main Loop =============== #
 
@@ -714,6 +756,7 @@ class Updater(QObject):
             self.detect_and_update_hp,
             self.detect_and_update_art,
             self.detect_and_update_weapon,
+            self.detect_and_update_relic,
         ]:
             try:
                 detect_fn()
@@ -742,6 +785,9 @@ class Updater(QObject):
             is_setting_opened=self.is_setting_opened,
         ))
         self.weapon_overlay_ui_state_signal.emit(WeaponOverlayUIState(
+            is_game_foreground=is_foreground,
+        ))
+        self.relic_overlay_ui_state_signal.emit(WeaponOverlayUIState(
             is_game_foreground=is_foreground,
         ))
 
@@ -827,3 +873,4 @@ class Updater(QObject):
     def stop(self):
         self._running = False
         self.detector.weapon_detector.stop()
+        self.detector.relic_detector.stop()
