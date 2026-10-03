@@ -16,7 +16,11 @@ MAX_TEXT_WIDTH_CHARS = 36
 
 AFFIX_COLOR = QColor("#ffd98a")
 WEAPON_COLOR = QColor("#9fd6ff")
+SKILL_COLOR = QColor("#b7f0c0")
+SPELL_COLOR = QColor("#ddc6ff")
+MIXED_COLOR = QColor("#f0e6c0")
 DIM_COLOR = QColor("#9a9a9a")
+KIND_COLORS = {"weapon": WEAPON_COLOR, "affix": AFFIX_COLOR, "skill": SKILL_COLOR, "spell": SPELL_COLOR, "mixed": MIXED_COLOR}
 BACKGROUND_COLOR = QColor(12, 12, 16, 205)
 
 
@@ -156,7 +160,7 @@ class WeaponOverlayWidget(QWidget):
             painter.setBrush(BACKGROUND_COLOR)
             painter.drawRoundedRect(QRectF(x, y, w, h), 4, 4)
             painter.setFont(font)
-            painter.setPen(DIM_COLOR if ann.dim else (WEAPON_COLOR if ann.kind == "weapon" else AFFIX_COLOR))
+            painter.setPen(DIM_COLOR if ann.dim else KIND_COLORS.get(ann.kind, AFFIX_COLOR))
             painter.drawText(QRect(x + PADDING_X, y + PADDING_Y, w - PADDING_X * 2, h - PADDING_Y * 2),
                              int(Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                              text)

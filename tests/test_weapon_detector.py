@@ -16,6 +16,7 @@ pytest.importorskip("cv2")
 from PIL import Image, ImageDraw, ImageFont
 
 from src.detector.weapon_detector import WeaponDetectParam, WeaponDetector
+from src.weapon.info import get_weapon_info
 
 FRAME_SIZE = (1920, 1080)
 REGION = (1200, 300, 640, 420)      # 面板区域 (x, y, w, h)，屏幕坐标
@@ -77,7 +78,7 @@ def test_detects_weapon_and_affixes_on_screen(detector):
     result = wait_for_result(detector, engine, WeaponDetectParam(region=REGION))
 
     by_name = {a.name: a for a in result.annotations}
-    assert set(by_name) == {"火焰匕首", "提升魔力属性攻击力", "提升血量上限", "强化致命一击"}, \
+    assert set(by_name) == {"火焰匕首", "提升魔力属性攻击力", "提升血量上限", "强化致命一击", "盲击"}, \
         [(a.name, a.text) for a in result.annotations]
 
     assert by_name["火焰匕首"].kind == "weapon"
@@ -86,6 +87,10 @@ def test_detects_weapon_and_affixes_on_screen(detector):
     assert by_name["提升魔力属性攻击力"].text == "魔力伤害 +9%"
     assert by_name["强化致命一击"].text == "伤害 +12%/+18%/+24%（档位1/2/3）"
     assert by_name["提升血量上限"].dim
+    # 面板里的“战技：盲击”按上方的武器（火焰匕首）取对应动作的伤害摘要
+    info = get_weapon_info()
+    assert by_name["盲击"].kind == "skill" and not by_name["盲击"].dim
+    assert by_name["盲击"].text == info.lookup_skill("盲击").text_for(info.lookup_weapon("火焰匕首").id)
 
     # 标注锚点位置是文字在屏幕上的位置（误差在字高以内）
     for lx, ly, size, text in PANEL_LINES:
@@ -94,7 +99,7 @@ def test_detects_weapon_and_affixes_on_screen(detector):
                 x, y, w, h = ann.box
                 assert abs(x - lx) < size and abs(y - ly) < size * 1.5, (text, ann.box)
                 assert w > size * 2 and h > size * 0.5
-    # 所有文字行（含没匹配到的“战技：盲击”）都作为避让区域返回
+    # 所有文字行都作为避让区域返回
     assert len(result.line_boxes) >= 5
     assert not result.stale
 

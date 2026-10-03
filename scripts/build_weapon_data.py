@@ -1,5 +1,5 @@
 """
-从社区整理的解包数据生成 data/weapons.json（武器属性补正 + 局内武器词条数值）。
+从社区整理的解包数据生成 data/weapons.json（武器属性补正 + 局内武器词条数值 + 战技 / 法术伤害摘要）。
 
 上游数据：https://github.com/sganggs/nightreign-relic-checker 的 data/ 目录（GPL-3.0，
 由 regulation.bin 的 EquipParamWeapon / SpEffectParam / AttachEffectParam 与游戏内简中文本整理而成）。
@@ -14,9 +14,13 @@ import glob
 import json
 import os
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+from src.weapon.info import action_summary, spell_summary    # noqa: E402  摘要文案与程序里的展示逻辑共用
+
 DEFAULT_OUT = os.path.join(ROOT, "data", "weapons.json")
 
 SOURCES = [
@@ -24,7 +28,8 @@ SOURCES = [
         "name": "nightreign-relic-checker (sganggs)",
         "url": "https://github.com/sganggs/nightreign-relic-checker",
         "license": "GPL-3.0",
-        "use": "EquipParamWeapon 属性补正、局内武器词条（AttachEffectParam/SpEffectParam）数值与简中名称",
+        "use": "EquipParamWeapon 属性补正、局内武器词条（AttachEffectParam/SpEffectParam）数值、"
+               "战技 / 法术（SwordArts / Magic）伤害摘要与简中名称",
     },
     {
         "name": "ELDEN RING NIGHTREIGN regulation.bin / 游戏内文本",
@@ -39,6 +44,8 @@ ATTACK_POWER_RATE_KEYS = ["physicsAttackPowerRate", "magicAttackPowerRate", "fir
                           "thunderAttackPowerRate", "darkAttackPowerRate"]
 
 CORRECT_KEYS = ["strength", "dexterity", "intelligence", "faith", "arcane"]
+# 这两类武器拿在手里时，同名的战技 / 法术优先按法术显示
+CASTER_TYPES = {"辉石魔杖", "圣印记"}
 
 
 def find_json(upstream: str, prefix: str) -> dict:
@@ -110,8 +117,49 @@ def build_weapons(skills: dict) -> dict:
             "type": w["wepTypeZh"],
             "rarity": w["rarityZh"],
             "correct": correct,
+            "id": w["id"],
+            "caster": w["wepTypeZh"] in CASTER_TYPES,
         }
     return weapons
+
+
+def variant_hits(skill: dict, variant: dict) -> list[dict]:
+    by_id = {hit["atkId"]: hit for hit in skill.get("hits") or []}
+    return [by_id[atk_id] for atk_id in variant.get("atkIds") or [] if atk_id in by_id]
+
+
+def skill_groups(skill: dict) -> list[tuple[str | None, list[int]]]:
+    """战技的 (伤害摘要, 带这个动作套的武器 id 列表)；同一战技在不同武器上的动作套可能不同（variants）"""
+    groups = [(action_summary(variant_hits(skill, v)), v.get("weaponIds") or []) for v in skill.get("variants") or []]
+    return groups or [(action_summary(skill.get("hits") or []), [])]
+
+
+def build_skills(skills: list[dict]) -> dict:
+    """
+    战技名 -> 伤害摘要。出现在最多武器上的摘要作为默认文案 text，其余武器单独记在 byWeapon。
+    少数战技重名（专属武器各自一条，数值不同），按名字合并后同样用 byWeapon 区分
+    """
+    ids: dict[str, int] = {}
+    groups_by_name: dict[str, list] = defaultdict(list)
+    for skill in skills:
+        name = skill["nameZh"]
+        if name == "无战技":
+            continue
+        ids.setdefault(name, skill["id"])
+        groups_by_name[name].extend(skill_groups(skill))
+    built = {}
+    for name, groups in groups_by_name.items():
+        default = max(groups, key=lambda group: len(group[1]))[0]
+        by_weapon = {str(wid): text for text, weapon_ids in groups if text != default for wid in weapon_ids}
+        built[name] = {"id": ids[name], "text": default, "byWeapon": by_weapon}
+    return built
+
+
+def build_spells(spells: list[dict]) -> dict:
+    return {
+        spell["nameZh"]: {"id": spell["id"], "text": spell_summary(spell.get("mp"), spell.get("hits") or [])}
+        for spell in spells
+    }
 
 
 def build_affixes(buffs: dict, relics: dict) -> dict:
@@ -177,6 +225,13 @@ def main():
 
     weapons = build_weapons(skills)
     affixes = build_affixes(buffs, relics)
+    skill_rows = build_skills(skills["skills"])
+    spell_rows = build_spells(skills["spells"])
+    duplicated = sorted(n for n, count in Counter(s["nameZh"] for s in skills["skills"]).items() if count > 1 and n in skill_rows)
+    print(f"战技: {len(skill_rows)} 个（{sum(1 for r in skill_rows.values() if r['text'])} 个有伤害，"
+          f"{sum(1 for r in skill_rows.values() if r['byWeapon'])} 个因武器而异），"
+          f"法术: {len(spell_rows)} 个（{sum(1 for r in spell_rows.values() if r['text'])} 个有伤害）"
+          + (f"；重名战技已合并：{'、'.join(duplicated)}" if duplicated else ""))
 
     all_affix_names = {a["name"] for a in relics["extraAffixes"] if 8000000 <= a["effectId"] < 9000000}
     out = {
@@ -188,6 +243,8 @@ def main():
         "affix_names_without_values": sorted(n for n in all_affix_names if n not in affixes and not n.startswith("词条 ")),
         "weapons": weapons,
         "affixes": affixes,
+        "skills": skill_rows,
+        "spells": spell_rows,
     }
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
